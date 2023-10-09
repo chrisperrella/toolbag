@@ -1,0 +1,47 @@
+gui/
+mesh/
+baker/
+*.code-workspace
+post/
+python/
+scene/
+plugin/Examples/
+plugin/Generate Primitives/
+plugin/Strange Attractors/
+plugin/MPIC Convert/
+plugin/Screenshot per Camera/
+shader/bake/
+shader/common/
+shader/editor/
+shader/export/
+texture/
+shader/ui/
+sky/
+shader/trace/
+shader/paint/
+shader/mat/transparency/
+shader/mat/surface/
+shader/mat/reflectivity/
+shader/mat/reflection/
+shader/mat/other/
+shader/mat/merge/
+shader/mat/light.comp
+shader/mat/light.frag
+shader/mat/mat.comp
+shader/mat/mat.frag
+shader/mat/mat.vert
+shader/mat/matDeform.comp
+shader/mat/mesh.comp
+shader/mat/state.comp
+shader/mat/state.frag
+shader/mat/state.vert
+shader/mat/diffusion/
+shader/mat/albedo/
+shader/mat/emissive/
+shader/mat/occlusion/
+shader/mat/transmission/
+shader/mat/displacement/
+shader/mat/microsurface/
+text/english.txt
+shader/mat/custom/example1.frag
+shader/mat/custom/example2.frag
