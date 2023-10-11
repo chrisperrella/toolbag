@@ -45,3 +45,15 @@ shader/mat/microsurface/
 text/english.txt
 shader/mat/custom/example1.frag
 shader/mat/custom/example2.frag
+*.tbmat
+plugin/Fun/
+shader/denoise/
+shader/mat/transmissivity/
+usd/
+workspace/
+shader/mat/medium/
+shader/mat/sheen/
+shader/mat/fresnel.frag
+shader/mat/matpaint.frag
+shader/mat/microfacetDistribution.frag
+shader/mat/stateShadow.comp
