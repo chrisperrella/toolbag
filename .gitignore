@@ -57,3 +57,4 @@ shader/mat/fresnel.frag
 shader/mat/matpaint.frag
 shader/mat/microfacetDistribution.frag
 shader/mat/stateShadow.comp
+__pycache__
