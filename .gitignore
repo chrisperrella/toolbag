@@ -58,3 +58,17 @@ shader/mat/matpaint.frag
 shader/mat/microfacetDistribution.frag
 shader/mat/stateShadow.comp
 __pycache__
+
+d3d12/
+
+splineProfile/
+
+*.sh
+
+*.comp
+
+*.frag
+
+*.vert
+
+shader/ffx/sort/
