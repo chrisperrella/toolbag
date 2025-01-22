@@ -177,7 +177,9 @@ def require_file(path: Union[Path, str]):
 
 
 def run_and_log_process(
-    command: list, is_warning_fn: Callable[[str], bool] = lambda _: False, env: Optional[dict] = None
+    command: list,
+    is_warning_fn: Callable[[str], bool] = lambda _: False,
+    env: Optional[dict] = None,
 ) -> subprocess.Popen:
     from .log import log
 

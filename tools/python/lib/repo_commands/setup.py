@@ -6,8 +6,10 @@ from global_constants import global_constants
 from log import log
 from utils import strip_suffix
 
+
 def setup() -> bool:
     return True
+
 
 def run(args: List[str] = []) -> int:
     parser = argparse.ArgumentParser(

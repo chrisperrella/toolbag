@@ -6,9 +6,10 @@ import stat
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Coroutine
+from typing import Coroutine, List
 
 from log import log
+
 
 class PythonFormatter:
     def __init__(self, args: List[str]):
@@ -31,7 +32,7 @@ class PythonFormatter:
             help="Verify formatting without applying changes.",
         )
         args = parser.parse_args(args=args)
-        
+
         self.__list = args.list
         self.__verify = args.verify
         self.__formatted_files = set()
@@ -54,7 +55,7 @@ class PythonFormatter:
         for file in files:
             log.info(f"Adding isort task for: {file}")
             tasks_isort.append(self.__async_run_python_isort(file))
-        
+
         for file_chunk in self.__chunk_files_for_black(files):
             log.info(f"Adding black task for chunk: {file_chunk}")
             tasks_black.append(self.__async_run_python_black(file_chunk))
@@ -62,7 +63,9 @@ class PythonFormatter:
         log.info("Executing tasks...")
 
         failed_files = []
-        failed_files += asyncio.run(self.__run_tasks_in_parallel(multiprocessing.cpu_count(), tasks_isort))
+        failed_files += asyncio.run(
+            self.__run_tasks_in_parallel(multiprocessing.cpu_count(), tasks_isort)
+        )
         log.info("Completed isort tasks.")
 
         failed_files += asyncio.run(self.__run_tasks_in_parallel(1, tasks_black))
@@ -84,11 +87,13 @@ class PythonFormatter:
         log.info(f"Running command: {' '.join(command)}")
         result = subprocess.run(command, capture_output=True, text=True)
         if result.returncode != 0:
-            print(f"Failed to retrieve git-managed files. Error: {result.stderr.strip()}")
+            print(
+                f"Failed to retrieve git-managed files. Error: {result.stderr.strip()}"
+            )
             return []
         files = result.stdout.strip().split("\n")
         log.info(f"Git-managed files found: {files}")
-        
+
         return [str(Path(f).resolve()) for f in files if f]
 
     def __chunk_files_for_black(self, files: List[str]) -> List[List[str]]:
@@ -156,14 +161,14 @@ class PythonFormatter:
 
     async def __run_subprocess(self, args: List[str]):
         process = await asyncio.create_subprocess_exec(
-            *args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
         stdout, stderr = await process.communicate()
         return process.returncode, stdout.decode().strip()
 
-    async def __run_tasks_in_parallel(self, job_count: int, tasks: List[Coroutine]) -> List[str]:
+    async def __run_tasks_in_parallel(
+        self, job_count: int, tasks: List[Coroutine]
+    ) -> List[str]:
         semaphore = asyncio.Semaphore(job_count)
 
         async def run_task(task):
@@ -175,6 +180,7 @@ class PythonFormatter:
             failures.extend(result)
 
         return failures
+
 
 def run(args: List[str] = []) -> int:
     formatter = PythonFormatter(args)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+
 class GlobalConstants:
     def __del__(self):
         self.cleanup()
@@ -9,7 +10,7 @@ class GlobalConstants:
     def __init__(self):
         self.__lib_path = None
         self.__tools_path = None
-        self.__root_path = None        
+        self.__root_path = None
 
     def cleanup(self):
         self.__lib_path = None
@@ -33,5 +34,6 @@ class GlobalConstants:
         file_path = Path(__file__).resolve()
         self.__root_path = file_path.parents[3]
         return self.__root_path
+
 
 global_constants = GlobalConstants()
