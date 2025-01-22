@@ -8,6 +8,8 @@ import sys
 from pathlib import Path
 from typing import List, Coroutine
 
+from log import log
+
 class PythonFormatter:
     def __init__(self, args: List[str]):
         parser = argparse.ArgumentParser(
@@ -32,61 +34,60 @@ class PythonFormatter:
         
         self.__list = args.list
         self.__verify = args.verify
-        self.__failed_files = []
         self.__formatted_files = set()
 
     def run(self) -> int:
         files = self.__get_git_managed_python_files()
         if len(files) == 0:
-            print("No Python files found to format.")
+            log.warn("No Python files found to format.")
             return 0
 
         if self.__list:
-            print(f"Found {len(files)} Python files:")
-            print("\n".join(files))
+            log.info(f"Found {len(files)} Python files:")
+            log.info("\n".join(files))
             return 0
 
-        print("Starting formatting tasks...")
+        log.info("Starting formatting tasks...")
 
         tasks_black = []
         tasks_isort = []
         for file in files:
-            print(f"Adding isort task for: {file}")
+            log.info(f"Adding isort task for: {file}")
             tasks_isort.append(self.__async_run_python_isort(file))
         
         for file_chunk in self.__chunk_files_for_black(files):
-            print(f"Adding black task for chunk: {file_chunk}")
+            log.info(f"Adding black task for chunk: {file_chunk}")
             tasks_black.append(self.__async_run_python_black(file_chunk))
 
-        print("Executing tasks...")
+        log.info("Executing tasks...")
 
         failed_files = []
         failed_files += asyncio.run(self.__run_tasks_in_parallel(multiprocessing.cpu_count(), tasks_isort))
-        print("Completed isort tasks.")
+        log.info("Completed isort tasks.")
 
         failed_files += asyncio.run(self.__run_tasks_in_parallel(1, tasks_black))
-        print("Completed black tasks.")
+        log.info("Completed black tasks.")
 
         if failed_files:
-            print(f"Formatting failed for {len(failed_files)} files.")
+            log.error(f"Formatting failed for {len(failed_files)} files.")
             for file in failed_files:
-                print(file)
+                log.warning(file)
             return 1
 
         if self.__formatted_files:
-            print(f"Successfully formatted {len(self.__formatted_files)} files.")
+            log.info(f"Successfully formatted {len(self.__formatted_files)} files.")
 
         return 0
 
     def __get_git_managed_python_files(self) -> List[str]:
-        command = ["git", "ls-files", "--", "plugin/**/*.py"]
-        print(f"Running command: {' '.join(command)}")
+        command = ["git", "ls-files", "--", "**/*.py"]
+        log.info(f"Running command: {' '.join(command)}")
         result = subprocess.run(command, capture_output=True, text=True)
         if result.returncode != 0:
             print(f"Failed to retrieve git-managed files. Error: {result.stderr.strip()}")
             return []
         files = result.stdout.strip().split("\n")
-        print(f"Git-managed files found: {files}")
+        log.info(f"Git-managed files found: {files}")
         
         return [str(Path(f).resolve()) for f in files if f]
 
@@ -175,6 +176,6 @@ class PythonFormatter:
 
         return failures
 
-if __name__ == "__main__":
-    formatter = PythonFormatter(sys.argv[1:])
-    sys.exit(formatter.run())
+def run(args: List[str] = []) -> int:
+    formatter = PythonFormatter(args)
+    return formatter.run()
