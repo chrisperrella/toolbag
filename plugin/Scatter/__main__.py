@@ -3,20 +3,27 @@ import importlib.util
 import math
 import random
 import sys
+import time
 from pathlib import Path
 from typing import List, Tuple
 
 import mset
 
-generate_primitives_path = Path(
-    "C:\Program Files\Marmoset\Toolbag 5\data\plugin\Generate Primitives"
-)
+generate_primitives_path = Path("C:\Program Files\Marmoset\Toolbag 5\data\plugin\Generate Primitives")
 sys.path.append(str(generate_primitives_path))
 module_path = generate_primitives_path / "uvsphere.py"
 spec = importlib.util.spec_from_file_location("uvsphere", module_path)
 uvsphere_module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(uvsphere_module)
 uvsphere = uvsphere_module.uvsphere
+
+debug_area_timer = 0.0
+debug_parse_timer = 0.0
+debug_vertices_timer = 0.0
+debug_normals_timer = 0.0
+debug_uvs_timer = 0.0
+debug_random_triangle_timer = 0.0
+debug_uvsphere_timer = 0.0
 
 
 def cross_product(a: List[float], b: List[float]) -> List[float]:
@@ -35,9 +42,7 @@ def dot_product(a: List[float], b: List[float]) -> float:
     return sum(a[i] * b[i] for i in range(len(a)))
 
 
-def rotation_matrix_from_axis_angle(
-    axis: List[float], angle: float
-) -> List[List[float]]:
+def rotation_matrix_from_axis_angle(axis: List[float], angle: float) -> List[List[float]]:
     x, y, z = axis
     cos_angle = math.cos(angle)
     sin_angle = math.sin(angle)
@@ -114,10 +119,14 @@ class ScatterSurface:
             self.uvs = uvs
 
         def area(self) -> float:
+            global debug_area_timer
+            start_time = time.time()
             edge1 = [self.vertices[1][i] - self.vertices[0][i] for i in range(3)]
             edge2 = [self.vertices[2][i] - self.vertices[0][i] for i in range(3)]
             cross = cross_product(edge1, edge2)
-            return 0.5 * math.sqrt(dot_product(cross, cross))
+            area = 0.5 * math.sqrt(sum(c**2 for c in cross))
+            debug_area_timer += time.time() - start_time
+            return area
 
         def random_barycentric(self) -> Tuple[float, float, float]:
             u = random.random()
@@ -128,62 +137,82 @@ class ScatterSurface:
             return u, v, w
 
         def barycentric_position(self, u: float, v: float, w: float) -> List[float]:
-            return [
-                self.vertices[0][i] * u
-                + self.vertices[1][i] * v
-                + self.vertices[2][i] * w
-                for i in range(3)
-            ]
+            return [self.vertices[0][i] * u + self.vertices[1][i] * v + self.vertices[2][i] * w for i in range(3)]
 
         def interpolated_normal(self, u: float, v: float, w: float) -> List[float]:
-            interpolated = [
-                self.normals[0][i] * u + self.normals[1][i] * v + self.normals[2][i] * w
-                for i in range(3)
-            ]
+            interpolated = [self.normals[0][i] * u + self.normals[1][i] * v + self.normals[2][i] * w for i in range(3)]
             return normalize(interpolated)
 
     def __init__(self, mesh_object: mset.MeshObject) -> None:
+        self._scene_object = mesh_object
         self._mesh: mset.Mesh = mesh_object.mesh
         self._cumulative_areas: List[float] = []
         self._triangles: List[ScatterSurface.ScatterTriangle] = []
         self._prepare_mesh_data()
 
-    def _parse_triangle(self, start_idx: int) -> ScatterTriangle:
+    def _parse_triangle(self, start_idx: int, vertices, normals, uvs, triangles) -> ScatterTriangle:
+        global debug_parse_timer, debug_vertices_timer, debug_normals_timer, debug_uvs_timer
+        start_time = time.time()
         v1_idx, v2_idx, v3_idx = self._mesh.triangles[start_idx : start_idx + 3]
-        vertices = (
-            self._mesh.vertices[v1_idx * 3 : v1_idx * 3 + 3],
-            self._mesh.vertices[v2_idx * 3 : v2_idx * 3 + 3],
-            self._mesh.vertices[v3_idx * 3 : v3_idx * 3 + 3],
+        vertices_start = time.time()
+        verts = (
+            vertices[v1_idx * 3 : v1_idx * 3 + 3],
+            vertices[v2_idx * 3 : v2_idx * 3 + 3],
+            vertices[v3_idx * 3 : v3_idx * 3 + 3],
         )
-        normals = (
-            self._mesh.normals[v1_idx * 3 : v1_idx * 3 + 3],
-            self._mesh.normals[v2_idx * 3 : v2_idx * 3 + 3],
-            self._mesh.normals[v3_idx * 3 : v3_idx * 3 + 3],
+        debug_vertices_timer += time.time() - vertices_start
+        normals_start = time.time()
+        norms = (
+            normals[v1_idx * 3 : v1_idx * 3 + 3],
+            normals[v2_idx * 3 : v2_idx * 3 + 3],
+            normals[v3_idx * 3 : v3_idx * 3 + 3],
         )
+        debug_normals_timer += time.time() - normals_start
+        uvs_start = time.time()
         uvs = (
-            self._mesh.uvs[v1_idx * 2 : v1_idx * 2 + 2],
-            self._mesh.uvs[v2_idx * 2 : v2_idx * 2 + 2],
-            self._mesh.uvs[v3_idx * 2 : v3_idx * 2 + 2],
+            uvs[v1_idx * 2 : v1_idx * 2 + 2],
+            uvs[v2_idx * 2 : v2_idx * 2 + 2],
+            uvs[v3_idx * 2 : v3_idx * 2 + 2],
         )
-        return self.ScatterTriangle((v1_idx, v2_idx, v3_idx), vertices, normals, uvs)
+        debug_uvs_timer += time.time() - uvs_start
+        debug_parse_timer += time.time() - start_time
+        return self.ScatterTriangle((v1_idx, v2_idx, v3_idx), verts, norms, uvs)
 
     def _add_triangle(self, triangle: ScatterTriangle, cumulative_area: float) -> float:
         area = triangle.area()
         self._cumulative_areas.append(cumulative_area + area)
         self._triangles.append(triangle)
-        return cumulative_area + area
+        cumulative_area += area
+        return cumulative_area
 
     def _prepare_mesh_data(self) -> None:
+        mset.log(f"[Scatter Plugin] Preparing mesh data for {self._scene_object.name}... \n")
+        vertices = self._mesh.vertices
+        normals = self._mesh.normals
+        uvs = self._mesh.uvs
+        triangles = self._mesh.triangles
+
         cumulative_area = 0.0
         for i in range(0, len(self._mesh.triangles), 3):
-            triangle = self._parse_triangle(i)
+            triangle = self._parse_triangle(i, vertices, normals, uvs, triangles)
             cumulative_area = self._add_triangle(triangle, cumulative_area)
 
+        mset.log(f"[Scatter Plugin] Total parsing time: {debug_parse_timer:.6f} seconds \n")
+        mset.log(f"[Scatter Plugin] - Vertex extraction time: {debug_vertices_timer:.6f} seconds  \n")
+        mset.log(f"[Scatter Plugin] - Normal extraction time: {debug_normals_timer:.6f} seconds  \n")
+        mset.log(f"[Scatter Plugin] - UV extraction time: {debug_uvs_timer:.6f} seconds  \n")
+        mset.log(f"[Scatter Plugin] Total area calculation time: {debug_area_timer:.6f} seconds  \n")
+        mset.log("[Scatter Plugin] Mesh data preparation complete \n")
+        mset.log("----------------------------------- \n")
+
     def random_triangle(self) -> ScatterTriangle:
+        global debug_random_triangle_timer
+        start_time = time.time()
         if not self._triangles:
             raise ValueError("No triangles available in the surface")
         random_value = random.uniform(0, self._cumulative_areas[-1])
         index = bisect.bisect(self._cumulative_areas, random_value)
+        debug_random_triangle_timer += time.time() - start_time
         return self._triangles[index]
 
 
@@ -193,9 +222,7 @@ class ScatterPlugin:
         self.window.visible = True
         self._test()
 
-    def _get_random_transform_from_scatter_surface(
-        self, scatter_surface: ScatterSurface
-    ) -> Tuple[List[float], List[float]]:
+    def _get_random_transform_from_scatter_surface(self, scatter_surface: ScatterSurface) -> Tuple[List[float], List[float]]:
         triangle = scatter_surface.random_triangle()
         u, v, w = triangle.random_barycentric()
         position = triangle.barycentric_position(u, v, w)
@@ -204,15 +231,13 @@ class ScatterPlugin:
         return position, rotation
 
     def _test(self) -> None:
+        _total_timer = time.time()
         mesh_object = mset.findObject("Sphere")
         scatter_surface = ScatterSurface(mesh_object)
+        _scattering_timer = time.time()
         for i in range(100):
-            position, rotation = self._get_random_transform_from_scatter_surface(
-                scatter_surface
-            )
-            (tris, verts, uvs, polys) = uvsphere(
-                0.05 / mset.getSceneUnitScale(), 10, 10
-            )
+            position, rotation = self._get_random_transform_from_scatter_surface(scatter_surface)
+            (tris, verts, uvs, polys) = uvsphere(0.05 / mset.getSceneUnitScale(), 10, 10)
             scene_prim_mesh = mset.Mesh(triangles=tris, vertices=verts, uvs=uvs)
             scene_prim = mset.MeshObject()
             scene_prim.mesh = scene_prim_mesh
@@ -220,6 +245,11 @@ class ScatterPlugin:
             scene_prim.collapsed = True
             scene_prim.position = position
             scene_prim.rotation = rotation
+        debug_scattering_timer = time.time() - _scattering_timer
+        mset.log(f"[Scatter Plugin] Total time: {time.time() - _total_timer:.6f} seconds  \n")
+        mset.log(f"[Scatter Plugin] - Preparing mesh data: {debug_parse_timer:.6f} seconds  \n")
+        mset.log(f"[Scatter Plugin] - Scattering primitives: {debug_scattering_timer:.6f} seconds  \n")
+        mset.log("----------------------------------- \n")
 
     def _shutdown(self) -> None:
         mset.shutdownPlugin()

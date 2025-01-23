@@ -103,9 +103,7 @@ def __create_log(max_logs: int = 100) -> __ToolbagLogger:
         logs = [logs_path / e for e in os.listdir(logs_path)]
         logs.sort(key=lambda log: log.stat().st_mtime)
         if max_logs > 0:
-            while (
-                len(failed_logs) + len(logs) >= max_logs and len(failed_logs) < max_logs
-            ):
+            while len(failed_logs) + len(logs) >= max_logs and len(failed_logs) < max_logs:
                 old_log = logs.pop(0)
                 debugs.append(f'Removing log "{os.path.basename(old_log)}"')
                 try:
