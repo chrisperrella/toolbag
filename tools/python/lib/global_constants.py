@@ -11,11 +11,15 @@ class GlobalConstants:
         self.__lib_path = None
         self.__tools_path = None
         self.__root_path = None
+        self.__plugins_path = None
+        self.__toolbag_dir = None
 
     def cleanup(self):
         self.__lib_path = None
         self.__tools_path = None
         self.__root_path = None
+        self.__plugins_path = None
+        self.__toolbag_dir = None
 
     @property
     def lib_path(self) -> Path:
@@ -34,6 +38,18 @@ class GlobalConstants:
         file_path = Path(__file__).resolve()
         self.__root_path = file_path.parents[3]
         return self.__root_path
+
+    @property
+    def plugins_path(self) -> Path:
+        if not isinstance(self.__plugins_path, Path):
+            self.__plugins_path = self.root_path / "plugin"
+        return self.__plugins_path
+
+    @property
+    def toolbag_dir(self) -> Path:
+        if not isinstance(self.__toolbag_dir, Path):
+            self.__toolbag_dir = Path("C:/Program Files/Marmoset/Toolbag 5")
+        return self.__toolbag_dir
 
 
 global_constants = GlobalConstants()

@@ -5,8 +5,6 @@ import subprocess
 from pathlib import Path
 from typing import Callable, List, Optional, Set, Union
 
-import toml
-
 
 def are_lists_same(a: list, b: list) -> bool:
     if len(a) != len(b):
@@ -106,25 +104,12 @@ def is_junction(path: Union[Path, str]) -> bool:
         return False
 
 
-def load_merged_toml_files(*args: List[Union[Path, str]]) -> dict:
-    from .log import log
-
-    toml_obj = {}
-    for path in args:
-        if not isinstance(path, Path):
-            path = Path(path)
-        if path.is_file():
-            with open(path, "r") as file:
-                try:
-                    obj = toml.loads(file.read())
-                    merge_objects(toml_obj, obj)
-                except TypeError as e:
-                    log.warning(f'Failed to parse toml file "{path}"! ({e})')
-                    obj = {}
-                except toml.TomlDecodeError as e:
-                    log.warning(f'Failed to parse toml file "{path}"! ({e})')
-                    obj = {}
-    return toml_obj
+def make_junction(src: Union[Path, str], dst: Union[Path, str]) -> bool:
+    command = ["mklink", "/J", str(dst), str(src)]
+    returncode = run_and_log_process(command).returncode
+    if returncode != 0:
+        return False
+    return True
 
 
 def merge_objects(dst: dict, src: dict):
@@ -181,7 +166,7 @@ def run_and_log_process(
     is_warning_fn: Callable[[str], bool] = lambda _: False,
     env: Optional[dict] = None,
 ) -> subprocess.Popen:
-    from .log import log
+    from log import log
 
     def do_log(p: subprocess.Popen):
         stdout = p.stdout.readline()
