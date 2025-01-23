@@ -20,9 +20,9 @@ class AlignPlugin:
             obj for obj in selected_objects if isinstance(obj, mset.MeshObject)
         ]
         if multi_selection_required and len(selected_mesh_objects) < 2:
-            mset.err("[AlignPlugin]: At least two mesh objects must be selected.")
+            mset.err("[AlignPlugin]: At least two mesh objects must be selected. \n")
         if not selected_mesh_objects:
-            mset.err("[AlignPlugin]: No MeshObject selected.")
+            mset.err("[AlignPlugin]: No MeshObject selected. \n")
         return selected_mesh_objects
 
     @staticmethod
