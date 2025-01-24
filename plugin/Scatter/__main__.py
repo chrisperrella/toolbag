@@ -1,12 +1,11 @@
 import bisect
-import cProfile
 import importlib.util
 import math
 import random
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from pstats import Stats
 from typing import List, Tuple
 
 import mset
@@ -25,7 +24,6 @@ debug_vertices_timer = 0.0
 debug_normals_timer = 0.0
 debug_uvs_timer = 0.0
 debug_random_triangle_timer = 0.0
-debug_uvsphere_timer = 0.0
 debug_prepare_mesh_timer = 0.0
 debug_scattering_timer = 0.0
 debug_total_timer = 0.0
@@ -167,7 +165,7 @@ class ScatterSurface:
             self.rotation = [normal_to_rotation(normal)[i] + rotation[i] for i in range(3)]
             self.mesh = mesh
 
-        def duplicate_meshobject_to_xform(self) -> mset.MeshObject:
+        def duplicate_mesh_object_to_point(self) -> mset.MeshObject:
             if not self.mesh:
                 (tris, verts, uvs, polys) = uvsphere(0.05 / mset.getSceneUnitScale(), 10, 10)
                 debug_mesh_data = mset.Mesh(triangles=tris, vertices=verts, uvs=uvs)
@@ -198,35 +196,17 @@ class ScatterSurface:
     def _parse_triangle(self, start_idx: int, vertices, normals, uvs, triangles) -> ScatterTriangle:
         global debug_parse_timer, debug_vertices_timer, debug_normals_timer, debug_uvs_timer
         parse_start = time.perf_counter()
-
-        v1_idx, v2_idx, v3_idx = self._mesh.triangles[start_idx : start_idx + 3]
-
+        v1_idx, v2_idx, v3_idx = triangles[start_idx : start_idx + 3]
         vertices_start = time.perf_counter()
-        verts = (
-            vertices[v1_idx * 3 : v1_idx * 3 + 3],
-            vertices[v2_idx * 3 : v2_idx * 3 + 3],
-            vertices[v3_idx * 3 : v3_idx * 3 + 3],
-        )
+        verts = vertices[v1_idx * 3 : (v1_idx + 1) * 3], vertices[v2_idx * 3 : (v2_idx + 1) * 3], vertices[v3_idx * 3 : (v3_idx + 1) * 3]
         debug_vertices_timer += time.perf_counter() - vertices_start
-
         normals_start = time.perf_counter()
-        norms = (
-            normals[v1_idx * 3 : v1_idx * 3 + 3],
-            normals[v2_idx * 3 : v2_idx * 3 + 3],
-            normals[v3_idx * 3 : v3_idx * 3 + 3],
-        )
+        norms = normals[v1_idx * 3 : (v1_idx + 1) * 3], normals[v2_idx * 3 : (v2_idx + 1) * 3], normals[v3_idx * 3 : (v3_idx + 1) * 3]
         debug_normals_timer += time.perf_counter() - normals_start
-
         uvs_start = time.perf_counter()
-        uvs = (
-            uvs[v1_idx * 2 : v1_idx * 2 + 2],
-            uvs[v2_idx * 2 : v2_idx * 2 + 2],
-            uvs[v3_idx * 2 : v3_idx * 2 + 2],
-        )
+        uvs = uvs[v1_idx * 2 : (v1_idx + 1) * 2], uvs[v2_idx * 2 : (v2_idx + 1) * 2], uvs[v3_idx * 2 : (v3_idx + 1) * 2]
         debug_uvs_timer += time.perf_counter() - uvs_start
-
         debug_parse_timer += time.perf_counter() - parse_start
-
         return self.ScatterTriangle((v1_idx, v2_idx, v3_idx), verts, norms, uvs)
 
     def _add_triangle(self, triangle: ScatterTriangle, cumulative_area: float) -> float:
@@ -273,10 +253,17 @@ class ScatterSurface:
         self.scatter_points.append(point)
         return point
 
-    def scatter_mesh_objects_to_xform(self) -> None:
-        for point in self.scatter_points:
-            scattered_mesh_object = point.duplicate_meshobject_to_xform()
-            self.scatter_mesh_objects.append(scattered_mesh_object)
+    def duplicate_mesh_objects_to_points(self) -> None:
+        batch_size = 10
+        scatter_batches = [self.scatter_points[i : i + batch_size] for i in range(0, len(self.scatter_points), batch_size)]
+
+        def process_batch(batch):
+            return [point.duplicate_mesh_object_to_point() for point in batch]
+
+        with ThreadPoolExecutor() as executor:
+            results = executor.map(process_batch, scatter_batches)
+        for batch_result in results:
+            self.scatter_mesh_objects.extend(batch_result)
 
 
 class ScatterPlugin:
@@ -288,14 +275,12 @@ class ScatterPlugin:
     def _test(self) -> None:
         global debug_total_timer, debug_scattering_timer
         total_start = time.perf_counter()
-        (tris, verts, uvs, polys) = uvsphere(100, 50, 50)
         scatter_mesh = mset.getSelectedObjects()[0]
         scattering_start = time.perf_counter()
         scatter_surface = ScatterSurface(scatter_mesh)
-        _scattering_timer = time.time()
-        for i in range(100):
+        for i in range(1000):
             scatter_surface.create_random_scatter_point()
-        scatter_surface.scatter_mesh_objects_to_xform()
+        scatter_surface.duplicate_mesh_objects_to_points()
         debug_scattering_timer += time.perf_counter() - scattering_start
         debug_total_timer += time.perf_counter() - total_start
         mset.log(f"[Scatter Plugin] Total time: {debug_total_timer:.6f} seconds \n")
@@ -308,9 +293,4 @@ class ScatterPlugin:
 
 
 if __name__ == "__main__":
-    with cProfile.Profile() as pr:
-        ScatterPlugin()
-    stats = Stats(pr)
-    stats.strip_dirs()
-    stats.sort_stats("cumtime")
-    stats.print_stats()
+    ScatterPlugin()
