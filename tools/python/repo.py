@@ -19,14 +19,10 @@ def install_requirements() -> bool:
         except ImportError:
             lines.append(f"{name}=={version}")
     if len(lines) > 0:
-        with tempfile.NamedTemporaryFile(
-            delete=False, mode="w+", suffix=".txt"
-        ) as file:
+        with tempfile.NamedTemporaryFile(delete=False, mode="w+", suffix=".txt") as file:
             file.write("\n".join(lines) + "\n")
             file.close()
-            result = subprocess.run(
-                [sys.executable, "-m", "pip", "install", "-r", file.name]
-            )
+            result = subprocess.run([sys.executable, "-m", "pip", "install", "-r", file.name])
             if result.returncode != 0:
                 print("Failed to install requirements!")
                 return False
@@ -45,21 +41,13 @@ if __name__ == "__main__":
     command_name = sys.argv[1] if len(sys.argv) > 1 else ""
     command_path = repo_commands / f"{command_name}.py"
     if command_name == "help":
-        commands = [
-            strip_suffix(e)
-            for e in os.listdir(repo_commands)
-            if e.lower().endswith(".py")
-        ]
+        commands = [strip_suffix(e) for e in os.listdir(repo_commands) if e.lower().endswith(".py")]
         command_string = "    " + "\n    ".join(commands)
         print(f"Available commands:\n{command_string}")
         sys.exit(0)
     if not command_path.exists() or not command_path.is_file():
         print(repo_commands)
-        commands = [
-            strip_suffix(e)
-            for e in os.listdir(repo_commands)
-            if e.lower().endswith(".py")
-        ]
+        commands = [strip_suffix(e) for e in os.listdir(repo_commands) if e.lower().endswith(".py")]
         command_string = "    " + "\n    ".join(commands)
         print(f'Command "{command_name}" is not a valid command!')
         print(f"Valid commands are:\n{command_string}")

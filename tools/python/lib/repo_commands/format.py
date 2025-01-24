@@ -63,9 +63,7 @@ class PythonFormatter:
         log.info("Executing tasks...")
 
         failed_files = []
-        failed_files += asyncio.run(
-            self.__run_tasks_in_parallel(multiprocessing.cpu_count(), tasks_isort)
-        )
+        failed_files += asyncio.run(self.__run_tasks_in_parallel(multiprocessing.cpu_count(), tasks_isort))
         log.info("Completed isort tasks.")
 
         failed_files += asyncio.run(self.__run_tasks_in_parallel(1, tasks_black))
@@ -87,9 +85,7 @@ class PythonFormatter:
         log.info(f"Running command: {' '.join(command)}")
         result = subprocess.run(command, capture_output=True, text=True)
         if result.returncode != 0:
-            print(
-                f"Failed to retrieve git-managed files. Error: {result.stderr.strip()}"
-            )
+            print(f"Failed to retrieve git-managed files. Error: {result.stderr.strip()}")
             return []
         files = result.stdout.strip().split("\n")
         log.info(f"Git-managed files found: {files}")
@@ -102,7 +98,7 @@ class PythonFormatter:
             "-m",
             "black",
             "-l",
-            "88",  # Line length can be adjusted if needed
+            "160",  # Line length can be adjusted if needed
         ]
         if self.__verify:
             black_args.append("--check")
@@ -133,7 +129,7 @@ class PythonFormatter:
             "-m",
             "black",
             "-l",
-            "88",
+            "160",
             "--check" if self.__verify else "--quiet",
             *files,
         ]
@@ -160,15 +156,11 @@ class PythonFormatter:
         return []
 
     async def __run_subprocess(self, args: List[str]):
-        process = await asyncio.create_subprocess_exec(
-            *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-        )
+        process = await asyncio.create_subprocess_exec(*args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         stdout, stderr = await process.communicate()
         return process.returncode, stdout.decode().strip()
 
-    async def __run_tasks_in_parallel(
-        self, job_count: int, tasks: List[Coroutine]
-    ) -> List[str]:
+    async def __run_tasks_in_parallel(self, job_count: int, tasks: List[Coroutine]) -> List[str]:
         semaphore = asyncio.Semaphore(job_count)
 
         async def run_task(task):
