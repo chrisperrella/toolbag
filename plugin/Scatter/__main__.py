@@ -1,5 +1,4 @@
 import bisect
-import cProfile
 import importlib.util
 import math
 import random
@@ -7,7 +6,6 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from pstats import Stats
 from typing import List, Tuple
 
 import mset
@@ -26,7 +24,6 @@ debug_vertices_timer = 0.0
 debug_normals_timer = 0.0
 debug_uvs_timer = 0.0
 debug_random_triangle_timer = 0.0
-debug_uvsphere_timer = 0.0
 debug_prepare_mesh_timer = 0.0
 debug_scattering_timer = 0.0
 debug_total_timer = 0.0
@@ -168,7 +165,7 @@ class ScatterSurface:
             self.rotation = [normal_to_rotation(normal)[i] + rotation[i] for i in range(3)]
             self.mesh = mesh
 
-        def duplicate_meshobject_to_xform(self) -> mset.MeshObject:
+        def duplicate_mesh_object_to_point(self) -> mset.MeshObject:
             if not self.mesh:
                 (tris, verts, uvs, polys) = uvsphere(0.05 / mset.getSceneUnitScale(), 10, 10)
                 debug_mesh_data = mset.Mesh(triangles=tris, vertices=verts, uvs=uvs)
@@ -256,12 +253,12 @@ class ScatterSurface:
         self.scatter_points.append(point)
         return point
 
-    def scatter_mesh_objects_to_xform(self) -> None:
+    def duplicate_mesh_objects_to_points(self) -> None:
         batch_size = 10
         scatter_batches = [self.scatter_points[i : i + batch_size] for i in range(0, len(self.scatter_points), batch_size)]
 
         def process_batch(batch):
-            return [point.duplicate_meshobject_to_xform() for point in batch]
+            return [point.duplicate_mesh_object_to_point() for point in batch]
 
         with ThreadPoolExecutor() as executor:
             results = executor.map(process_batch, scatter_batches)
@@ -281,9 +278,9 @@ class ScatterPlugin:
         scatter_mesh = mset.getSelectedObjects()[0]
         scattering_start = time.perf_counter()
         scatter_surface = ScatterSurface(scatter_mesh)
-        for i in range(100):
+        for i in range(1000):
             scatter_surface.create_random_scatter_point()
-        scatter_surface.scatter_mesh_objects_to_xform()
+        scatter_surface.duplicate_mesh_objects_to_points()
         debug_scattering_timer += time.perf_counter() - scattering_start
         debug_total_timer += time.perf_counter() - total_start
         mset.log(f"[Scatter Plugin] Total time: {debug_total_timer:.6f} seconds \n")
