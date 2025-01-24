@@ -1,12 +1,12 @@
-import cProfile
-from pstats import Stats
 import bisect
+import cProfile
 import importlib.util
 import math
 import random
 import sys
 import time
 from pathlib import Path
+from pstats import Stats
 from typing import List, Tuple
 
 import mset
@@ -26,9 +26,10 @@ debug_normals_timer = 0.0
 debug_uvs_timer = 0.0
 debug_random_triangle_timer = 0.0
 debug_uvsphere_timer = 0.0
-debug_prepare_mesh_timer = 0.0  
+debug_prepare_mesh_timer = 0.0
 debug_scattering_timer = 0.0
 debug_total_timer = 0.0
+
 
 def cross_product(a: List[float], b: List[float]) -> List[float]:
     if len(a) != 3 or len(b) != 3:
@@ -197,9 +198,9 @@ class ScatterSurface:
     def _parse_triangle(self, start_idx: int, vertices, normals, uvs, triangles) -> ScatterTriangle:
         global debug_parse_timer, debug_vertices_timer, debug_normals_timer, debug_uvs_timer
         parse_start = time.perf_counter()
-        
+
         v1_idx, v2_idx, v3_idx = self._mesh.triangles[start_idx : start_idx + 3]
-        
+
         vertices_start = time.perf_counter()
         verts = (
             vertices[v1_idx * 3 : v1_idx * 3 + 3],
@@ -207,7 +208,7 @@ class ScatterSurface:
             vertices[v3_idx * 3 : v3_idx * 3 + 3],
         )
         debug_vertices_timer += time.perf_counter() - vertices_start
-        
+
         normals_start = time.perf_counter()
         norms = (
             normals[v1_idx * 3 : v1_idx * 3 + 3],
@@ -215,7 +216,7 @@ class ScatterSurface:
             normals[v3_idx * 3 : v3_idx * 3 + 3],
         )
         debug_normals_timer += time.perf_counter() - normals_start
-        
+
         uvs_start = time.perf_counter()
         uvs = (
             uvs[v1_idx * 2 : v1_idx * 2 + 2],
@@ -223,9 +224,9 @@ class ScatterSurface:
             uvs[v3_idx * 2 : v3_idx * 2 + 2],
         )
         debug_uvs_timer += time.perf_counter() - uvs_start
-        
+
         debug_parse_timer += time.perf_counter() - parse_start
-        
+
         return self.ScatterTriangle((v1_idx, v2_idx, v3_idx), verts, norms, uvs)
 
     def _add_triangle(self, triangle: ScatterTriangle, cumulative_area: float) -> float:
@@ -311,5 +312,5 @@ if __name__ == "__main__":
         ScatterPlugin()
     stats = Stats(pr)
     stats.strip_dirs()
-    stats.sort_stats('cumtime')
+    stats.sort_stats("cumtime")
     stats.print_stats()
