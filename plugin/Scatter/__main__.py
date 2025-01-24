@@ -120,12 +120,12 @@ class ScatterSurface:
 
         def area(self) -> float:
             global debug_area_timer
-            start_time = time.time()
+            area_start_time = time.time()
             edge1 = [self.vertices[1][i] - self.vertices[0][i] for i in range(3)]
             edge2 = [self.vertices[2][i] - self.vertices[0][i] for i in range(3)]
             cross = cross_product(edge1, edge2)
             area = 0.5 * math.sqrt(sum(c**2 for c in cross))
-            debug_area_timer += time.time() - start_time
+            debug_area_timer += time.time() - area_start_time
             return area
 
         def random_barycentric(self) -> Tuple[float, float, float]:
@@ -148,11 +148,15 @@ class ScatterSurface:
         self._mesh: mset.Mesh = mesh_object.mesh
         self._cumulative_areas: List[float] = []
         self._triangles: List[ScatterSurface.ScatterTriangle] = []
+        self._vertices = self._mesh.vertices
+        self._normals = self._mesh.normals
+        self._uvs = self._mesh.uvs
+        self._mesh_triangles = self._mesh.triangles
         self._prepare_mesh_data()
 
     def _parse_triangle(self, start_idx: int, vertices, normals, uvs, triangles) -> ScatterTriangle:
         global debug_parse_timer, debug_vertices_timer, debug_normals_timer, debug_uvs_timer
-        start_time = time.time()
+        parse_start = time.time()
         v1_idx, v2_idx, v3_idx = self._mesh.triangles[start_idx : start_idx + 3]
         vertices_start = time.time()
         verts = (
@@ -175,7 +179,7 @@ class ScatterSurface:
             uvs[v3_idx * 2 : v3_idx * 2 + 2],
         )
         debug_uvs_timer += time.time() - uvs_start
-        debug_parse_timer += time.time() - start_time
+        debug_parse_timer += time.time() - parse_start
         return self.ScatterTriangle((v1_idx, v2_idx, v3_idx), verts, norms, uvs)
 
     def _add_triangle(self, triangle: ScatterTriangle, cumulative_area: float) -> float:
@@ -187,21 +191,16 @@ class ScatterSurface:
 
     def _prepare_mesh_data(self) -> None:
         mset.log(f"[Scatter Plugin] Preparing mesh data for {self._scene_object.name}... \n")
-        vertices = self._mesh.vertices
-        normals = self._mesh.normals
-        uvs = self._mesh.uvs
-        triangles = self._mesh.triangles
-
         cumulative_area = 0.0
         for i in range(0, len(self._mesh.triangles), 3):
-            triangle = self._parse_triangle(i, vertices, normals, uvs, triangles)
+            triangle = self._parse_triangle(i, self._vertices, self._normals, self._uvs, self._mesh_triangles)
             cumulative_area = self._add_triangle(triangle, cumulative_area)
 
         mset.log(f"[Scatter Plugin] Total parsing time: {debug_parse_timer:.6f} seconds \n")
         mset.log(f"[Scatter Plugin] - Vertex extraction time: {debug_vertices_timer:.6f} seconds  \n")
         mset.log(f"[Scatter Plugin] - Normal extraction time: {debug_normals_timer:.6f} seconds  \n")
         mset.log(f"[Scatter Plugin] - UV extraction time: {debug_uvs_timer:.6f} seconds  \n")
-        mset.log(f"[Scatter Plugin] Total area calculation time: {debug_area_timer:.6f} seconds  \n")
+        mset.log(f"[Scatter Plugin] - Area calculation time: {debug_area_timer:.6f} seconds  \n")
         mset.log("[Scatter Plugin] Mesh data preparation complete \n")
         mset.log("----------------------------------- \n")
 
