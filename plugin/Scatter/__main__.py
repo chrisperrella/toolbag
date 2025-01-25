@@ -180,7 +180,7 @@ class ScatterSurface:
             mesh_object.scale = self.scale
             return mesh_object
 
-    def __init__(self, mesh_object: mset.MeshObject) -> None:
+    def __init__(self, mesh_object: mset.MeshObject, seed: int = None) -> None:
         self._scene_object = mesh_object
         self._mesh: mset.Mesh = mesh_object.mesh
         self._cumulative_areas: List[float] = list()
@@ -189,11 +189,17 @@ class ScatterSurface:
         self._normals = self._mesh.normals
         self._uvs = self._mesh.uvs
         self._mesh_triangles = self._mesh.triangles
-        self._prepare_mesh_data()
+        self.seed = seed
         self.scatter_points: List[self.ScatterPoint] = list()
         self.scatter_mesh_objects: List[mset.MeshObject] = list()
+        self._prepare_mesh_data()
+        self._apply_seed()
 
-    def _parse_triangle(self, start_idx: int, vertices, normals, uvs, triangles) -> ScatterTriangle:
+    def _apply_seed(self) -> None:
+        if self.seed is not None:
+            random.seed(self.seed)
+
+    def _get_triangle_data(self, start_idx: int, vertices, normals, uvs, triangles) -> ScatterTriangle:
         global debug_parse_timer, debug_vertices_timer, debug_normals_timer, debug_uvs_timer
         parse_start = time.perf_counter()
         v1_idx, v2_idx, v3_idx = triangles[start_idx : start_idx + 3]
@@ -222,7 +228,7 @@ class ScatterSurface:
         mset.log(f"[Scatter Plugin] Preparing mesh data for {self._scene_object.name}... \n")
         cumulative_area = 0.0
         for i in range(0, len(self._mesh.triangles), 3):
-            triangle = self._parse_triangle(i, self._vertices, self._normals, self._uvs, self._mesh_triangles)
+            triangle = self._get_triangle_data(i, self._vertices, self._normals, self._uvs, self._mesh_triangles)
             cumulative_area = self._add_triangle(triangle, cumulative_area)
         debug_prepare_mesh_timer += time.perf_counter() - prepare_start
         mset.log(f"[Scatter Plugin] Total parsing time: {debug_parse_timer:.6f} seconds \n")
@@ -234,7 +240,7 @@ class ScatterSurface:
         mset.log("[Scatter Plugin] Mesh data preparation complete \n")
         mset.log("----------------------------------- \n")
 
-    def random_triangle(self) -> ScatterTriangle:
+    def get_random_triangle(self) -> ScatterTriangle:
         global debug_random_triangle_timer
         start_time = time.time()
         if not self._triangles:
@@ -245,7 +251,7 @@ class ScatterSurface:
         return self._triangles[index]
 
     def create_random_scatter_point(self) -> ScatterPoint:
-        triangle = self.random_triangle()
+        triangle = self.get_random_triangle()
         u, v, w = triangle.random_barycentric()
         position = triangle.barycentric_position(u, v, w)
         normal = triangle.interpolated_normal(u, v, w)
