@@ -1,6 +1,5 @@
 import bisect
 import cProfile
-from pstats import Stats
 import importlib.util
 import math
 import random
@@ -8,6 +7,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from pstats import Stats
 from typing import List, Tuple
 
 import mset
@@ -20,15 +20,57 @@ uvsphere_module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(uvsphere_module)
 uvsphere = uvsphere_module.uvsphere
 
-debug_area_timer = 0.0
-debug_parse_timer = 0.0
-debug_vertices_timer = 0.0
-debug_normals_timer = 0.0
-debug_uvs_timer = 0.0
-debug_random_triangle_timer = 0.0
-debug_prepare_mesh_timer = 0.0
-debug_scattering_timer = 0.0
-debug_total_timer = 0.0
+
+class DebugTimer:
+    def __init__(self):
+        self.timers = {
+            "debug_area_timer": 0.0,
+            "debug_parse_timer": 0.0,
+            "debug_random_triangle_timer": 0.0,
+            "debug_prepare_mesh_timer": 0.0,
+            "debug_scattering_timer": 0.0,
+            "debug_mask_timer": 0.0,
+            "debug_triangle_data_timer": 0.0,
+        }
+
+    def add_time(self, name: str, duration: float) -> None:
+        if name not in self.timers:
+            raise ValueError(f"Invalid timer name: {name}")
+        self.timers[name] += duration
+
+    def get_timer(self, name: str) -> float:
+        return self.timers.get(name, 0.0)
+
+    def calculate_total_time(self) -> float:
+        """Calculate total time as the sum of all individual timers."""
+        return sum(self.timers.values())
+
+    def log_timers(self) -> None:
+        total_time = self.calculate_total_time()
+        mset.log(f"[Scatter Plugin] Total time: {total_time:.6f} seconds \n")
+        mset.log(f"[Scatter Plugin] - Preparing mesh data: {self.get_timer('debug_prepare_mesh_timer'):.6f} seconds \n")
+        mset.log(f"[Scatter Plugin] - Triangle data extraction: {self.get_timer('debug_triangle_data_timer'):.6f} seconds \n")
+        mset.log(f"[Scatter Plugin] - Area calculation: {self.get_timer('debug_area_timer'):.6f} seconds \n")
+        mset.log(f"[Scatter Plugin] - Random triangle selection: {self.get_timer('debug_random_triangle_timer'):.6f} seconds \n")
+        mset.log(f"[Scatter Plugin] - Mask application: {self.get_timer('debug_mask_timer'):.6f} seconds \n")
+        mset.log(f"[Scatter Plugin] - Scattering objects: {self.get_timer('debug_scattering_timer'):.6f} seconds \n")
+        mset.log("----------------------------------- \n")
+
+    def timer(self, timer_name: str) -> callable:
+        def decorator(func: callable) -> callable:
+            def wrapper(*args, **kwargs):
+                start_time = time.perf_counter()
+                result = func(*args, **kwargs)
+                duration = time.perf_counter() - start_time
+                self.add_time(timer_name, duration)
+                return result
+
+            return wrapper
+
+        return decorator
+
+
+timers = DebugTimer()
 
 
 def cross_product(a: List[float], b: List[float]) -> List[float]:
@@ -123,14 +165,12 @@ class ScatterSurface:
             self.normals = normals
             self.uvs = uvs
 
+        @timers.timer("debug_area_timer")
         def area(self) -> float:
-            global debug_area_timer
-            area_start_time = time.time()
             edge1 = [self.vertices[1][i] - self.vertices[0][i] for i in range(3)]
             edge2 = [self.vertices[2][i] - self.vertices[0][i] for i in range(3)]
             cross = cross_product(edge1, edge2)
             area = 0.5 * math.sqrt(sum(c**2 for c in cross))
-            debug_area_timer += time.time() - area_start_time
             return area
 
         @staticmethod
@@ -198,15 +238,15 @@ class ScatterSurface:
         self._scene_object = mesh_object
         self._mesh: mset.Mesh = mesh_object.mesh
         self._triangles: List[ScatterSurface.ScatterTriangle] = list()
-        self._cumulative_areas: List[float] = list()        
+        self._cumulative_areas: List[float] = list()
         self._vertices = self._mesh.vertices
         self._normals = self._mesh.normals
         self._uvs = self._mesh.uvs
         self._mesh_triangles = self._mesh.triangles
         self.masks: List[ScatterSurface.ScatterMask] = list()
         self.scatter_points: List[self.ScatterPoint] = list()
-        self.scatter_mesh_objects: List[mset.MeshObject] = list()        
-        self.seed = seed       
+        self.scatter_mesh_objects: List[mset.MeshObject] = list()
+        self.seed = seed
         self._prepare_mesh_data()
         self._apply_random_seed(self.seed)
 
@@ -215,20 +255,12 @@ class ScatterSurface:
         if seed is not None:
             random.seed(seed)
 
+    @timers.timer("debug_triangle_data_timer")
     def _extract_triangle_data(self, start_idx: int, vertices, normals, uvs, triangles) -> ScatterTriangle:
-        global debug_parse_timer, debug_vertices_timer, debug_normals_timer, debug_uvs_timer
-        parse_start = time.perf_counter()
         v1_idx, v2_idx, v3_idx = triangles[start_idx : start_idx + 3]
-        vertices_start = time.perf_counter()
         verts = vertices[v1_idx * 3 : (v1_idx + 1) * 3], vertices[v2_idx * 3 : (v2_idx + 1) * 3], vertices[v3_idx * 3 : (v3_idx + 1) * 3]
-        debug_vertices_timer += time.perf_counter() - vertices_start
-        normals_start = time.perf_counter()
         norms = normals[v1_idx * 3 : (v1_idx + 1) * 3], normals[v2_idx * 3 : (v2_idx + 1) * 3], normals[v3_idx * 3 : (v3_idx + 1) * 3]
-        debug_normals_timer += time.perf_counter() - normals_start
-        uvs_start = time.perf_counter()
         uvs = uvs[v1_idx * 2 : (v1_idx + 1) * 2], uvs[v2_idx * 2 : (v2_idx + 1) * 2], uvs[v3_idx * 2 : (v3_idx + 1) * 2]
-        debug_uvs_timer += time.perf_counter() - uvs_start
-        debug_parse_timer += time.perf_counter() - parse_start
         return self.ScatterTriangle((v1_idx, v2_idx, v3_idx), verts, norms, uvs)
 
     def _add_triangle_with_area(self, triangle: ScatterTriangle, cumulative_area: float) -> float:
@@ -238,34 +270,23 @@ class ScatterSurface:
         cumulative_area += area
         return cumulative_area
 
+    @timers.timer("debug_prepare_mesh_timer")
     def _prepare_mesh_data(self) -> None:
-        global debug_prepare_mesh_timer
-        prepare_start = time.perf_counter()
         mset.log(f"[Scatter Plugin] Preparing mesh data for {self._scene_object.name}... \n")
         cumulative_area = 0.0
         for i in range(0, len(self._mesh.triangles), 3):
             triangle = self._extract_triangle_data(i, self._vertices, self._normals, self._uvs, self._mesh_triangles)
             cumulative_area = self._add_triangle_with_area(triangle, cumulative_area)
-        debug_prepare_mesh_timer += time.perf_counter() - prepare_start
-        mset.log(f"[Scatter Plugin] Total parsing time: {debug_parse_timer:.6f} seconds \n")
-        mset.log(f"[Scatter Plugin] - Vertex extraction time: {debug_vertices_timer:.6f} seconds \n")
-        mset.log(f"[Scatter Plugin] - Normal extraction time: {debug_normals_timer:.6f} seconds \n")
-        mset.log(f"[Scatter Plugin] - UV extraction time: {debug_uvs_timer:.6f} seconds \n")
-        mset.log(f"[Scatter Plugin] - Area calculation time: {debug_area_timer:.6f} seconds \n")
-        mset.log(f"[Scatter Plugin] Total prepare_mesh_data time: {debug_prepare_mesh_timer:.6f} seconds \n")
-        mset.log("[Scatter Plugin] Mesh data preparation complete \n")
-        mset.log("----------------------------------- \n")
 
+    @timers.timer("debug_random_triangle_timer")
     def select_random_triangle(self) -> ScatterTriangle:
-        global debug_random_triangle_timer
-        start_time = time.time()
         if not self._triangles:
             raise ValueError("No triangles available in the surface")
         random_value = random.uniform(0, self._cumulative_areas[-1])
         index = bisect.bisect(self._cumulative_areas, random_value)
-        debug_random_triangle_timer += time.time() - start_time
         return self._triangles[index]
 
+    @timers.timer("debug_scattering_timer")
     def generate_scatter_point(self, mesh: mset.MeshObject = None) -> ScatterPoint:
         triangle = self.select_random_triangle()
         u, v, w = triangle.generate_random_barycentric()
@@ -295,6 +316,7 @@ class ScatterSurface:
         mask = self.ScatterMask(mask_data, blend_method)
         self.masks.append(mask)
 
+    @timers.timer("debug_mask_timer")
     def apply_masks(self, u: float, v: float) -> float:
         final_value = 1.0
         for mask in self.masks:
@@ -318,7 +340,7 @@ class ScatterPlugin:
     def _test(self) -> None:
         def gradient_mask(u, v):
             return u * v
-        
+
         def checkerboard_mask(u, v, num_squares=6):
             scaled_u = int(u * num_squares)
             scaled_v = int(v * num_squares)
@@ -327,16 +349,12 @@ class ScatterPlugin:
             else:
                 return 0.0
 
-        global debug_total_timer, debug_scattering_timer
-        total_start = time.perf_counter()
-        
         selected_objects = mset.getSelectedObjects()
         if not selected_objects:
             mset.log("[Scatter Plugin] No objects selected. Exiting test.\n")
             return
-        
+
         scatter_mesh = selected_objects[0]
-        scattering_start = time.perf_counter()
         scatter_surface = ScatterSurface(scatter_mesh)
 
         scatter_surface.add_scatter_mask(lambda u, v: checkerboard_mask(u, v, num_squares=6), blend_method="multiply")
@@ -352,14 +370,7 @@ class ScatterPlugin:
             scatter_surface.generate_scatter_point(debug_mesh_object)
 
         scatter_surface.duplicate_mesh_objects_to_points()
-        debug_scattering_timer += time.perf_counter() - scattering_start
-        debug_total_timer += time.perf_counter() - total_start
-
-        mset.log(f"[Scatter Plugin] Total time: {debug_total_timer:.6f} seconds \n")
-        mset.log(f"[Scatter Plugin] - Preparing mesh data: {debug_prepare_mesh_timer:.6f} seconds \n")
-        mset.log(f"[Scatter Plugin] - Scattering objects: {debug_scattering_timer:.6f} seconds \n")
-        mset.log("----------------------------------- \n")
-
+        timers.log_timers()
 
     def _shutdown(self) -> None:
         mset.shutdownPlugin()
@@ -372,4 +383,3 @@ if __name__ == "__main__":
     stats.strip_dirs()
     stats.sort_stats("cumtime")
     stats.print_stats()
-
