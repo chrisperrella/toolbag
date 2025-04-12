@@ -5,10 +5,12 @@ import math
 import random
 import sys
 import time
+import functools
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from pstats import Stats
-from typing import List, Tuple
+from typing import List, Tuple, Dict, Callable, Any
+from contextlib import contextmanager
 
 import mset
 
@@ -21,45 +23,94 @@ spec.loader.exec_module(uvsphere_module)
 uvsphere = uvsphere_module.uvsphere
 
 
-class DebugTimer:
+class TimingStats:
     def __init__(self):
-        self._timers = {
-            "calculate_area_time": 0.0,
-            "prepare_mesh_time": 0.0,
-            "scattering_time": 0.0,
-            "apply_mask_time": 0.0,
-        }
+        self.times: Dict[str, List[float]] = {}
+        self.active_timers: Dict[str, float] = {}
+    
+    def start(self, name: str) -> None:
+        self.active_timers[name] = time.perf_counter()
+    
+    def stop(self, name: str) -> float:
+        if name not in self.active_timers:
+            raise ValueError(f"Timer '{name}' was never started")
+        
+        duration = time.perf_counter() - self.active_timers[name]
+        
+        if name not in self.times:
+            self.times[name] = []
+        
+        self.times[name].append(duration)
+        del self.active_timers[name]
+        return duration
+    
+    def report(self) -> None:
+        if not self.times:
+            mset.log("\n===== No Timing Data Available =====\n")
+            return
+            
+        # Calculate the longest name for formatting
+        longest_name = max(len(name) for name in self.times.keys())
+        
+        # Calculate max width needed for values
+        all_durations = [duration for durations in self.times.values() for duration in durations]
+        max_total = max(sum(self.times[name]) for name in self.times) if all_durations else 0
+        max_width = max(len(f"{max_total:.6f}"), 10)
+        
+        # Create header
+        separator = "=" * (longest_name + max_width * 2 + 30)
+        header = f"\n{separator}\n"
+        header += f"{'SCATTER TIMING REPORT':^{len(separator)}}\n"
+        header += f"{separator}\n\n"
+        
+        # Column headers with padding to align
+        header += f"{'SECTION':<{longest_name+2}} | {'TOTAL TIME':^{max_width+2}} | {'AVG TIME':^{max_width+2}} | {'CALLS':^8}\n"
+        header += f"{'-'*(longest_name+2)}-+-{'-'*(max_width+2)}-+-{'-'*(max_width+2)}-+-{'-'*8}\n"
+        mset.log(header)
+        
+        # Sort timings by total time (descending)
+        sorted_times = sorted(
+            self.times.items(), 
+            key=lambda x: sum(x[1]), 
+            reverse=True
+        )
+        
+        # Print each timing entry
+        for name, durations in sorted_times:
+            total = sum(durations)
+            avg = total / len(durations) if durations else 0
+            count = len(durations)
+            mset.log(f"{name:<{longest_name+2}} | {total:>{max_width}.6f}s | {avg:>{max_width}.6f}s | {count:>8}\n")
+        
+        # Add footer
+        mset.log(f"\n{separator}\n")
 
-    def add_time(self, name: str, duration: float) -> None:
-        if name not in self._timers:
-            raise ValueError(f"Invalid timer name: {name}")
-        self._timers[name] += duration
+timing_stats = TimingStats()
 
-    def calculate_total_time(self) -> float:
-        return sum(self._timers.values())
-
-    def log_timers(self) -> None:
-        total_time = self.calculate_total_time()
-        mset.log(f"[Scatter Plugin] Total time: {total_time:.6f} seconds\n")
-        for timer_name, duration in self._timers.items():
-            mset.log(f"[Scatter Plugin] - {timer_name.replace('_', ' ').capitalize()}: {duration:.6f} seconds\n")
-        mset.log("-----------------------------------\n")
-
-    def timer(self, timer_name: str) -> callable:
-        def decorator(func: callable) -> callable:
-            def wrapper(*args, **kwargs):
-                start_time = time.perf_counter()
+def timed(func=None, *, name=None):
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            timer_name = name or func.__name__
+            timing_stats.start(timer_name)
+            try:
                 result = func(*args, **kwargs)
-                duration = time.perf_counter() - start_time
-                self.add_time(timer_name, duration)
                 return result
-
-            return wrapper
-
+            finally:
+                timing_stats.stop(timer_name)
+        return wrapper
+    
+    if func is None:
         return decorator
+    return decorator(func)
 
-
-timers = DebugTimer()
+@contextmanager
+def timed_section(name: str):
+    timing_stats.start(name)
+    try:
+        yield
+    finally:
+        timing_stats.stop(name)
 
 
 def normalize(vector: List[float]) -> List[float]:
@@ -145,7 +196,7 @@ class ScatterTriangle:
         self.normals = normals
         self.uvs = uvs
 
-    @timers.timer("calculate_area_time")
+    @timed(name="triangle_area_calculation")
     def area(self) -> float:
         edge1 = [v2 - v1 for v1, v2 in zip(self.vertices[0], self.vertices[1])]
         edge2 = [v3 - v1 for v1, v3 in zip(self.vertices[0], self.vertices[2])]
@@ -217,10 +268,11 @@ class ScatterSurface:
         self.scatter_points: List[ScatterPoint] = []
         self.scatter_mesh_objects: List[mset.MeshObject] = []
         self.seed = seed
+        
         self._prepare_mesh_data()
         self._apply_random_seed(seed)
 
-    @timers.timer("prepare_mesh_time")
+    @timed(name="prepare_mesh_data")
     def _prepare_mesh_data(self):
         cumulative_area = 0.0
         for i in range(0, len(self.triangle_indices), 3):
@@ -245,14 +297,17 @@ class ScatterSurface:
         mask = ScatterMask(mask_data, blend_method)
         self.scatter_masks.append(mask)
 
-    @timers.timer("scattering_time")
+    @timed(name="generate_scatter_point")
     def generate_scatter_point(self, mesh: mset.MeshObject = None) -> ScatterPoint:
         random_value = random.uniform(0, self.cumulative_areas[-1])
         index = bisect.bisect(self.cumulative_areas, random_value)
         triangle = self.triangles[index]
 
         u, v, w = triangle.generate_random_barycentric()
-        mask_value = self.apply_masks(u, v)
+        
+        with timed_section("apply_masks"):
+            mask_value = self.apply_masks(u, v)
+        
         if mask_value <= 0.0:
             return None
 
@@ -262,7 +317,6 @@ class ScatterSurface:
         self.scatter_points.append(scatter_point)
         return scatter_point
 
-    @timers.timer("apply_mask_time")
     def apply_masks(self, u: float, v: float) -> float:
         final_value = 1.0
         for mask in self.scatter_masks:
@@ -280,6 +334,7 @@ class ScatterSurface:
     def process_batch(self, batch: List[ScatterPoint]) -> List[mset.MeshObject]:
         return [point.duplicate_mesh_object_to_point(name=f"ScatterPoint_{i}") for i, point in enumerate(batch)]
 
+    @timed(name="duplicate_mesh_objects")
     def duplicate_mesh_objects_to_points(self):
         batch_size = 10
         scatter_batches = [self.scatter_points[i : i + batch_size] for i in range(0, len(self.scatter_points), batch_size)]
@@ -295,31 +350,38 @@ class ScatterPlugin:
         self._test()
 
     def _test(self):
-        selected_objects = mset.getSelectedObjects()
-        if not selected_objects:
-            mset.log("[Scatter Plugin] No objects selected. Exiting test.\n")
-            return
+        with timed_section("total_test"):
+            selected_objects = mset.getSelectedObjects()
+            if not selected_objects:
+                mset.log("[Scatter Plugin] No objects selected. Exiting test.\n")
+                return
 
-        scatter_mesh = selected_objects[0]
-        scatter_surface = ScatterSurface(scatter_mesh)
+            scatter_mesh = selected_objects[0]
+            
+            with timed_section("surface_creation"):
+                scatter_surface = ScatterSurface(scatter_mesh)
 
-        def checkerboard_mask(u, v, squares=6):
-            return 1.0 if (int(u * squares) + int(v * squares)) % 2 == 0 else 0.0
+            def checkerboard_mask(u, v, squares=6):
+                return 1.0 if (int(u * squares) + int(v * squares)) % 2 == 0 else 0.0
 
-        scatter_surface.add_scatter_mask(checkerboard_mask)
+            scatter_surface.add_scatter_mask(checkerboard_mask)
 
-        tris, verts, uvs, polys = uvsphere(0.05 / mset.getSceneUnitScale(), 10, 10)
-        debug_mesh_data = mset.Mesh(triangles=tris, vertices=verts, uvs=uvs)
-        debug_mesh_object = mset.MeshObject()
-        debug_mesh_object.mesh = debug_mesh_data
-        debug_mesh_object.addSubmesh(debug_mesh_object.name)
-        debug_mesh_object.collapsed = True
+            with timed_section("sphere_creation"):
+                tris, verts, uvs, polys = uvsphere(0.05 / mset.getSceneUnitScale(), 10, 10)
+                debug_mesh_data = mset.Mesh(triangles=tris, vertices=verts, uvs=uvs)
+                debug_mesh_object = mset.MeshObject()
+                debug_mesh_object.mesh = debug_mesh_data
+                debug_mesh_object.addSubmesh(debug_mesh_object.name)
+                debug_mesh_object.collapsed = True
 
-        for _ in range(1000):
-            scatter_surface.generate_scatter_point(debug_mesh_object)
+            with timed_section("point_generation"):
+                for _ in range(1000):
+                    scatter_surface.generate_scatter_point(debug_mesh_object)
 
-        scatter_surface.duplicate_mesh_objects_to_points()
-        timers.log_timers()
+            scatter_surface.duplicate_mesh_objects_to_points()
+            
+            # Report the timing statistics
+            timing_stats.report()
 
     def _shutdown(self) -> None:
         mset.shutdownPlugin()
