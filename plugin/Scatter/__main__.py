@@ -1,12 +1,17 @@
 import bisect
+import cProfile
 import importlib.util
 import math
 import random
 import sys
 import time
+import functools
+import argparse
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import List, Tuple
+from pstats import Stats
+from typing import List, Tuple, Dict, Callable, Any
+from contextlib import contextmanager
 
 import mset
 
@@ -18,20 +23,105 @@ uvsphere_module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(uvsphere_module)
 uvsphere = uvsphere_module.uvsphere
 
-debug_area_timer = 0.0
-debug_parse_timer = 0.0
-debug_vertices_timer = 0.0
-debug_normals_timer = 0.0
-debug_uvs_timer = 0.0
-debug_random_triangle_timer = 0.0
-debug_prepare_mesh_timer = 0.0
-debug_scattering_timer = 0.0
-debug_total_timer = 0.0
+
+TIMING_MODE = 'log'
+
+class TimingStats:
+    def __init__(self):
+        self.times: Dict[str, List[float]] = {}
+        self.active_timers: Dict[str, float] = {}
+    
+    def start(self, name: str) -> None:
+        if TIMING_MODE == 'suppressed':
+            return
+        self.active_timers[name] = time.perf_counter()
+    
+    def stop(self, name: str) -> float:
+        if TIMING_MODE == 'suppressed':
+            return 0.0
+        
+        if name not in self.active_timers:
+            raise ValueError(f"Timer '{name}' was never started")
+        
+        duration = time.perf_counter() - self.active_timers[name]
+        
+        if name not in self.times:
+            self.times[name] = []
+        
+        self.times[name].append(duration)
+        del self.active_timers[name]
+        return duration
+    
+    def report(self) -> None:
+        if TIMING_MODE == 'suppressed' or not self.times:
+            return
+            
+        longest_name = max(len(name) for name in self.times.keys())
+        
+        # Calculate max width needed for values
+        all_durations = [duration for durations in self.times.values() for duration in durations]
+        max_total = max(sum(self.times[name]) for name in self.times) if all_durations else 0
+        max_width = max(len(f"{max_total:.6f}"), 10)
+        
+        separator = "=" * (longest_name + max_width * 2 + 30)
+        header = f"\n{separator}\n"
+        header += f"{'SCATTER TIMING REPORT':^{len(separator)}}\n"
+        header += f"{separator}\n\n"
+        
+        header += f"{'SECTION':<{longest_name+2}} | {'TOTAL TIME':^{max_width+2}} | {'AVG TIME':^{max_width+2}} | {'CALLS':^8}\n"
+        header += f"{'-'*(longest_name+2)}-+-{'-'*(max_width+2)}-+-{'-'*(max_width+2)}-+-{'-'*8}\n"
+        mset.log(header)
+        
+        sorted_times = sorted(
+            self.times.items(), 
+            key=lambda x: sum(x[1]), 
+            reverse=True
+        )
+        
+        for name, durations in sorted_times:
+            total = sum(durations)
+            avg = total / len(durations) if durations else 0
+            count = len(durations)
+            mset.log(f"{name:<{longest_name+2}} | {total:>{max_width}.6f}s | {avg:>{max_width}.6f}s | {count:>8}\n")
+        
+        mset.log(f"\n{separator}\n")
+
+timing_stats = TimingStats()
+
+def timed(func=None, *, name=None):
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            timer_name = name or func.__name__
+            timing_stats.start(timer_name)
+            try:
+                result = func(*args, **kwargs)
+                return result
+            finally:
+                timing_stats.stop(timer_name)
+        return wrapper
+    
+    if func is None:
+        return decorator
+    return decorator(func)
+
+@contextmanager
+def timed_section(name: str):
+    timing_stats.start(name)
+    try:
+        yield
+    finally:
+        timing_stats.stop(name)
+
+
+def normalize(vector: List[float]) -> List[float]:
+    magnitude = math.sqrt(sum(comp**2 for comp in vector))
+    if magnitude == 0:
+        raise ValueError("Cannot normalize a zero-length vector")
+    return [comp / magnitude for comp in vector]
 
 
 def cross_product(a: List[float], b: List[float]) -> List[float]:
-    if len(a) != 3 or len(b) != 3:
-        raise ValueError("Both vectors must be 3-dimensional")
     return [
         a[1] * b[2] - a[2] * b[1],
         a[2] * b[0] - a[0] * b[2],
@@ -40,12 +130,10 @@ def cross_product(a: List[float], b: List[float]) -> List[float]:
 
 
 def dot_product(a: List[float], b: List[float]) -> float:
-    if len(a) != len(b):
-        raise ValueError("Vectors must be of the same dimension")
     return sum(a[i] * b[i] for i in range(len(a)))
 
 
-def rotation_matrix_from_axis_angle(axis: List[float], angle: float) -> List[List[float]]:
+def create_rotation_matrix(axis: List[float], angle: float) -> List[List[float]]:
     x, y, z = axis
     cos_angle = math.cos(angle)
     sin_angle = math.sin(angle)
@@ -70,10 +158,10 @@ def rotation_matrix_from_axis_angle(axis: List[float], angle: float) -> List[Lis
     ]
 
 
-def rotation_matrix_to_euler(matrix: List[List[float]]) -> List[float]:
+def convert_rotation_to_euler(matrix: List[List[float]]) -> List[float]:
     sy = math.sqrt(matrix[0][0] ** 2 + matrix[1][0] ** 2)
-
     singular = sy < 1e-6
+
     if not singular:
         x = math.atan2(matrix[2][1], matrix[2][2])
         y = math.atan2(-matrix[2][0], sy)
@@ -86,190 +174,174 @@ def rotation_matrix_to_euler(matrix: List[List[float]]) -> List[float]:
     return [math.degrees(x), math.degrees(y), math.degrees(z)]
 
 
-def normal_to_rotation(normal: List[float]) -> List[float]:
+def convert_normal_to_rotation(normal: List[float]) -> List[float]:
     normal = normalize(normal)
     local_y = [0, 1, 0]
     cross = cross_product(local_y, normal)
     cross_magnitude = math.sqrt(sum(c**2 for c in cross))
+
     if cross_magnitude < 1e-6:
         return [0, 0, 0] if normal[1] > 0 else [180, 0, 0]
+
     axis = normalize(cross)
     dot = dot_product(local_y, normal)
     angle = math.atan2(cross_magnitude, dot)
-    rotation_matrix = rotation_matrix_from_axis_angle(axis, angle)
-    return rotation_matrix_to_euler(rotation_matrix)
+    rotation_matrix = create_rotation_matrix(axis, angle)
+    return convert_rotation_to_euler(rotation_matrix)
 
 
-def normalize(vector: List[float]) -> List[float]:
-    magnitude = math.sqrt(sum(comp**2 for comp in vector))
-    if magnitude == 0:
-        raise ValueError("Cannot normalize a zero-length vector")
-    return [comp / magnitude for comp in vector]
+class ScatterTriangle:
+    def __init__(self, indices, vertices, normals, uvs):
+        self.indices = indices
+        self.vertices = vertices
+        self.normals = normals
+        self.uvs = uvs
+
+    @timed(name="triangle_area_calculation")
+    def area(self) -> float:
+        edge1 = [v2 - v1 for v1, v2 in zip(self.vertices[0], self.vertices[1])]
+        edge2 = [v3 - v1 for v1, v3 in zip(self.vertices[0], self.vertices[2])]
+        cross = cross_product(edge1, edge2)
+        return 0.5 * math.sqrt(dot_product(cross, cross))
+
+    @staticmethod
+    def generate_random_barycentric() -> Tuple[float, float, float]:
+        u, v = random.uniform(0, 1), random.uniform(0, 1)
+        if u + v > 1:
+            u, v = 1 - u, 1 - v
+        return 1 - u - v, u, v
+
+    def calculate_barycentric_position(self, u: float, v: float, w: float) -> List[float]:
+        return [self.vertices[0][i] * u + self.vertices[1][i] * v + self.vertices[2][i] * w for i in range(3)]
+
+    def calculate_interpolated_normal(self, u: float, v: float, w: float) -> List[float]:
+        interpolated = [self.normals[0][i] * u + self.normals[1][i] * v + self.normals[2][i] * w for i in range(3)]
+        return normalize(interpolated)
+
+
+class ScatterPoint:
+    def __init__(self, triangle, position, normal, barycentric, scale=None, rotation=None, mesh=None):
+        self.triangle = triangle
+        self.position = position
+        self.normal = normal
+        self.barycentric = barycentric
+        self.scale = scale or [1.0, 1.0, 1.0]
+        self.rotation = [r + offset for r, offset in zip(convert_normal_to_rotation(normal), rotation or [0, 0, 0])]
+        self.source_mesh = mesh
+
+    def duplicate_mesh_object_to_point(self, name=None) -> mset.MeshObject:
+        mesh_object = self.source_mesh.duplicate()
+        mesh_object.position = self.position
+        mesh_object.rotation = self.rotation
+        mesh_object.scale = self.scale
+        if name:
+            mesh_object.name = name
+        return mesh_object
+
+
+class ScatterMask:
+    def __init__(self, mask_data, blend_method="multiply"):
+        self.mask_data = mask_data
+        self.blend_method = blend_method.lower()
+
+    def get_value(self, u: float, v: float) -> float:
+        if callable(self.mask_data):
+            return self.mask_data(u, v)
+        elif isinstance(self.mask_data, list):
+            width, height = len(self.mask_data[0]), len(self.mask_data)
+            x, y = int(u * width), int(v * height)
+            return self.mask_data[y][x]
+        else:
+            raise TypeError(f"Unexpected mask_data type: {type(self.mask_data)}")
 
 
 class ScatterSurface:
-    class ScatterTriangle:
-        def __init__(
-            self,
-            indices: Tuple[int, int, int],
-            vertices: Tuple[List[float], List[float], List[float]],
-            normals: Tuple[List[float], List[float], List[float]],
-            uvs: Tuple[List[float], List[float], List[float]],
-        ) -> None:
-            self.indices = indices
-            self.vertices = vertices
-            self.normals = normals
-            self.uvs = uvs
-
-        def area(self) -> float:
-            global debug_area_timer
-            area_start_time = time.time()
-            edge1 = [self.vertices[1][i] - self.vertices[0][i] for i in range(3)]
-            edge2 = [self.vertices[2][i] - self.vertices[0][i] for i in range(3)]
-            cross = cross_product(edge1, edge2)
-            area = 0.5 * math.sqrt(sum(c**2 for c in cross))
-            debug_area_timer += time.time() - area_start_time
-            return area
-
-        def random_barycentric(self) -> Tuple[float, float, float]:
-            u = random.random()
-            v = random.random()
-            if u + v > 1:
-                u, v = 1 - u, 1 - v
-            w = 1 - u - v
-            return u, v, w
-
-        def barycentric_position(self, u: float, v: float, w: float) -> List[float]:
-            return [self.vertices[0][i] * u + self.vertices[1][i] * v + self.vertices[2][i] * w for i in range(3)]
-
-        def interpolated_normal(self, u: float, v: float, w: float) -> List[float]:
-            interpolated = [self.normals[0][i] * u + self.normals[1][i] * v + self.normals[2][i] * w for i in range(3)]
-            return normalize(interpolated)
-
-    class ScatterPoint:
-        def __init__(
-            self,
-            triangle: "ScatterSurface.ScatterTriangle",
-            position: List[float],
-            normal: List[float],
-            barycentric: Tuple[float, float, float],
-            scale: List[float] = [1.0, 1.0, 1.0],
-            rotation: List[float] = [0, 0, 0],
-            mesh: mset.MeshObject = None,
-        ) -> None:
-            self.triangle = triangle
-            self.position = position
-            self.normal = normal
-            self.barycentric = barycentric
-            self.scale = scale
-            self.rotation = [normal_to_rotation(normal)[i] + rotation[i] for i in range(3)]
-            self.mesh = mesh
-
-        def duplicate_mesh_object_to_point(self) -> mset.MeshObject:
-            if not self.mesh:
-                (tris, verts, uvs, polys) = uvsphere(0.05 / mset.getSceneUnitScale(), 10, 10)
-                debug_mesh_data = mset.Mesh(triangles=tris, vertices=verts, uvs=uvs)
-                debug_mesh_object = mset.MeshObject()
-                debug_mesh_object.mesh = debug_mesh_data
-                debug_mesh_object.addSubmesh(debug_mesh_object.name)
-                debug_mesh_object.collapsed = True
-                self.mesh = debug_mesh_object
-            mesh_object = self.mesh.duplicate()
-            mesh_object.position = self.position
-            mesh_object.rotation = self.rotation
-            mesh_object.scale = self.scale
-            return mesh_object
-
     def __init__(self, mesh_object: mset.MeshObject, seed: int = None) -> None:
-        self._scene_object = mesh_object
-        self._mesh: mset.Mesh = mesh_object.mesh
-        self._cumulative_areas: List[float] = list()
-        self._triangles: List[ScatterSurface.ScatterTriangle] = list()
-        self._vertices = self._mesh.vertices
-        self._normals = self._mesh.normals
-        self._uvs = self._mesh.uvs
-        self._mesh_triangles = self._mesh.triangles
+        self.scene_object = mesh_object
+        self.mesh = mesh_object.mesh
+        self.vertices = self.mesh.vertices
+        self.normals = self.mesh.normals
+        self.uvs = self.mesh.uvs
+        self.triangle_indices = self.mesh.triangles
+        self.triangles: List[ScatterTriangle] = []
+        self.cumulative_areas: List[float] = []
+        self.scatter_masks: List[ScatterMask] = []
+        self.scatter_points: List[ScatterPoint] = []
+        self.scatter_mesh_objects: List[mset.MeshObject] = []
         self.seed = seed
-        self.scatter_points: List[self.ScatterPoint] = list()
-        self.scatter_mesh_objects: List[mset.MeshObject] = list()
+        
         self._prepare_mesh_data()
-        self._apply_seed()
+        self._apply_random_seed(seed)
 
-    def _apply_seed(self) -> None:
-        if self.seed is not None:
-            random.seed(self.seed)
-
-    def _get_triangle_data(self, start_idx: int, vertices, normals, uvs, triangles) -> ScatterTriangle:
-        global debug_parse_timer, debug_vertices_timer, debug_normals_timer, debug_uvs_timer
-        parse_start = time.perf_counter()
-        v1_idx, v2_idx, v3_idx = triangles[start_idx : start_idx + 3]
-        vertices_start = time.perf_counter()
-        verts = vertices[v1_idx * 3 : (v1_idx + 1) * 3], vertices[v2_idx * 3 : (v2_idx + 1) * 3], vertices[v3_idx * 3 : (v3_idx + 1) * 3]
-        debug_vertices_timer += time.perf_counter() - vertices_start
-        normals_start = time.perf_counter()
-        norms = normals[v1_idx * 3 : (v1_idx + 1) * 3], normals[v2_idx * 3 : (v2_idx + 1) * 3], normals[v3_idx * 3 : (v3_idx + 1) * 3]
-        debug_normals_timer += time.perf_counter() - normals_start
-        uvs_start = time.perf_counter()
-        uvs = uvs[v1_idx * 2 : (v1_idx + 1) * 2], uvs[v2_idx * 2 : (v2_idx + 1) * 2], uvs[v3_idx * 2 : (v3_idx + 1) * 2]
-        debug_uvs_timer += time.perf_counter() - uvs_start
-        debug_parse_timer += time.perf_counter() - parse_start
-        return self.ScatterTriangle((v1_idx, v2_idx, v3_idx), verts, norms, uvs)
-
-    def _add_triangle(self, triangle: ScatterTriangle, cumulative_area: float) -> float:
-        area = triangle.area()
-        self._cumulative_areas.append(cumulative_area + area)
-        self._triangles.append(triangle)
-        cumulative_area += area
-        return cumulative_area
-
-    def _prepare_mesh_data(self) -> None:
-        global debug_prepare_mesh_timer
-        prepare_start = time.perf_counter()
-        mset.log(f"[Scatter Plugin] Preparing mesh data for {self._scene_object.name}... \n")
+    @timed(name="prepare_mesh_data")
+    def _prepare_mesh_data(self):
         cumulative_area = 0.0
-        for i in range(0, len(self._mesh.triangles), 3):
-            triangle = self._get_triangle_data(i, self._vertices, self._normals, self._uvs, self._mesh_triangles)
-            cumulative_area = self._add_triangle(triangle, cumulative_area)
-        debug_prepare_mesh_timer += time.perf_counter() - prepare_start
-        mset.log(f"[Scatter Plugin] Total parsing time: {debug_parse_timer:.6f} seconds \n")
-        mset.log(f"[Scatter Plugin] - Vertex extraction time: {debug_vertices_timer:.6f} seconds \n")
-        mset.log(f"[Scatter Plugin] - Normal extraction time: {debug_normals_timer:.6f} seconds \n")
-        mset.log(f"[Scatter Plugin] - UV extraction time: {debug_uvs_timer:.6f} seconds \n")
-        mset.log(f"[Scatter Plugin] - Area calculation time: {debug_area_timer:.6f} seconds \n")
-        mset.log(f"[Scatter Plugin] Total prepare_mesh_data time: {debug_prepare_mesh_timer:.6f} seconds \n")
-        mset.log("[Scatter Plugin] Mesh data preparation complete \n")
-        mset.log("----------------------------------- \n")
+        for i in range(0, len(self.triangle_indices), 3):
+            indices = self.triangle_indices[i : i + 3]
+            vertices = [self.vertices[idx * 3 : (idx + 1) * 3] for idx in indices]
+            normals = [self.normals[idx * 3 : (idx + 1) * 3] for idx in indices]
+            uvs = [self.uvs[idx * 2 : (idx + 1) * 2] for idx in indices]
+            triangle = ScatterTriangle(indices, vertices, normals, uvs)
+            cumulative_area += triangle.area()
+            self.triangles.append(triangle)
+            self.cumulative_areas.append(cumulative_area)
 
-    def get_random_triangle(self) -> ScatterTriangle:
-        global debug_random_triangle_timer
-        start_time = time.time()
-        if not self._triangles:
-            raise ValueError("No triangles available in the surface")
-        random_value = random.uniform(0, self._cumulative_areas[-1])
-        index = bisect.bisect(self._cumulative_areas, random_value)
-        debug_random_triangle_timer += time.time() - start_time
-        return self._triangles[index]
+        if not self.triangles:
+            raise ValueError("Mesh has no valid triangles for scattering.")
 
-    def create_random_scatter_point(self) -> ScatterPoint:
-        triangle = self.get_random_triangle()
-        u, v, w = triangle.random_barycentric()
-        position = triangle.barycentric_position(u, v, w)
-        normal = triangle.interpolated_normal(u, v, w)
-        point = self.ScatterPoint(triangle, position, normal, [u, v, w])
-        self.scatter_points.append(point)
-        return point
+    @staticmethod
+    def _apply_random_seed(seed: int) -> None:
+        if seed is not None:
+            random.seed(seed)
 
-    def duplicate_mesh_objects_to_points(self) -> None:
+    def add_scatter_mask(self, mask_data, blend_method="multiply") -> ScatterMask:
+        mask = ScatterMask(mask_data, blend_method)
+        self.scatter_masks.append(mask)
+
+    @timed(name="generate_scatter_point")
+    def generate_scatter_point(self, mesh: mset.MeshObject = None) -> ScatterPoint:
+        random_value = random.uniform(0, self.cumulative_areas[-1])
+        index = bisect.bisect(self.cumulative_areas, random_value)
+        triangle = self.triangles[index]
+
+        u, v, w = triangle.generate_random_barycentric()
+        
+        with timed_section("apply_masks"):
+            mask_value = self.apply_masks(u, v)
+        
+        if mask_value <= 0.0:
+            return None
+
+        position = triangle.calculate_barycentric_position(u, v, w)
+        normal = triangle.calculate_interpolated_normal(u, v, w)
+        scatter_point = ScatterPoint(triangle, position, normal, [u, v, w], mesh=mesh)
+        self.scatter_points.append(scatter_point)
+        return scatter_point
+
+    def apply_masks(self, u: float, v: float) -> float:
+        final_value = 1.0
+        for mask in self.scatter_masks:
+            mask_value = mask.get_value(u, v)
+            if mask.blend_method == "multiply":
+                final_value *= mask_value
+            elif mask.blend_method == "add":
+                final_value += mask_value
+            elif mask.blend_method == "subtract":
+                final_value -= mask_value
+            else:
+                raise ValueError(f"Unsupported blend method: {mask.blend_method}")
+        return max(0.0, min(1.0, final_value))
+
+    def process_batch(self, batch: List[ScatterPoint]) -> List[mset.MeshObject]:
+        return [point.duplicate_mesh_object_to_point(name=f"ScatterPoint_{i}") for i, point in enumerate(batch)]
+
+    @timed(name="duplicate_mesh_objects")
+    def duplicate_mesh_objects_to_points(self):
         batch_size = 10
         scatter_batches = [self.scatter_points[i : i + batch_size] for i in range(0, len(self.scatter_points), batch_size)]
 
-        def process_batch(batch):
-            return [point.duplicate_mesh_object_to_point() for point in batch]
-
-        with ThreadPoolExecutor() as executor:
-            results = executor.map(process_batch, scatter_batches)
-        for batch_result in results:
-            self.scatter_mesh_objects.extend(batch_result)
+        for batch in scatter_batches:
+            self.scatter_mesh_objects.extend(self.process_batch(batch))
 
 
 class ScatterPlugin:
@@ -278,25 +350,59 @@ class ScatterPlugin:
         self.window.visible = True
         self._test()
 
-    def _test(self) -> None:
-        global debug_total_timer, debug_scattering_timer
-        total_start = time.perf_counter()
-        scatter_mesh = mset.getSelectedObjects()[0]
-        scattering_start = time.perf_counter()
-        scatter_surface = ScatterSurface(scatter_mesh)
-        for i in range(1000):
-            scatter_surface.create_random_scatter_point()
-        scatter_surface.duplicate_mesh_objects_to_points()
-        debug_scattering_timer += time.perf_counter() - scattering_start
-        debug_total_timer += time.perf_counter() - total_start
-        mset.log(f"[Scatter Plugin] Total time: {debug_total_timer:.6f} seconds \n")
-        mset.log(f"[Scatter Plugin] - Preparing mesh data: {debug_prepare_mesh_timer:.6f} seconds \n")
-        mset.log(f"[Scatter Plugin] - Scattering objects: {debug_scattering_timer:.6f} seconds \n")
-        mset.log("----------------------------------- \n")
+    def _test(self):
+        with timed_section("total_test"):
+            selected_objects = mset.getSelectedObjects()
+            if not selected_objects:
+                mset.log("[Scatter Plugin] No objects selected. Exiting test.\n")
+                return
+
+            scatter_mesh = selected_objects[0]
+            
+            with timed_section("surface_creation"):
+                scatter_surface = ScatterSurface(scatter_mesh)
+
+            def checkerboard_mask(u, v, squares=6):
+                return 1.0 if (int(u * squares) + int(v * squares)) % 2 == 0 else 0.0
+
+            scatter_surface.add_scatter_mask(checkerboard_mask)
+
+            with timed_section("sphere_creation"):
+                tris, verts, uvs, polys = uvsphere(0.05 / mset.getSceneUnitScale(), 10, 10)
+                debug_mesh_data = mset.Mesh(triangles=tris, vertices=verts, uvs=uvs)
+                debug_mesh_object = mset.MeshObject()
+                debug_mesh_object.mesh = debug_mesh_data
+                debug_mesh_object.addSubmesh(debug_mesh_object.name)
+                debug_mesh_object.collapsed = True
+
+            with timed_section("point_generation"):
+                for _ in range(1000):
+                    scatter_surface.generate_scatter_point(debug_mesh_object)
+
+            scatter_surface.duplicate_mesh_objects_to_points()
+            
+            timing_stats.report()
 
     def _shutdown(self) -> None:
         mset.shutdownPlugin()
 
 
 if __name__ == "__main__":
-    ScatterPlugin()
+    parser = argparse.ArgumentParser(description='Scatter Plugin')
+    parser.add_argument('--timing', choices=['suppressed', 'log', 'verbose'], 
+                      default='log', help='Timing mode: suppressed (no timing), ' 
+                      'log (custom timers only), or verbose (custom timers + cProfile)')
+    
+    args = parser.parse_args(None if len(sys.argv) > 1 else [])
+    
+    TIMING_MODE = args.timing
+    
+    if TIMING_MODE == 'verbose':
+        with cProfile.Profile() as pr:
+            ScatterPlugin()
+        stats = Stats(pr)
+        stats.strip_dirs()
+        stats.sort_stats("cumtime")
+        stats.print_stats()
+    else:
+        ScatterPlugin()
