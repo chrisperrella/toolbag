@@ -6,6 +6,7 @@ import random
 import sys
 import time
 import functools
+import argparse
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from pstats import Stats
@@ -23,15 +24,22 @@ spec.loader.exec_module(uvsphere_module)
 uvsphere = uvsphere_module.uvsphere
 
 
+TIMING_MODE = 'log'
+
 class TimingStats:
     def __init__(self):
         self.times: Dict[str, List[float]] = {}
         self.active_timers: Dict[str, float] = {}
     
     def start(self, name: str) -> None:
+        if TIMING_MODE == 'suppressed':
+            return
         self.active_timers[name] = time.perf_counter()
     
     def stop(self, name: str) -> float:
+        if TIMING_MODE == 'suppressed':
+            return 0.0
+        
         if name not in self.active_timers:
             raise ValueError(f"Timer '{name}' was never started")
         
@@ -45,11 +53,9 @@ class TimingStats:
         return duration
     
     def report(self) -> None:
-        if not self.times:
-            mset.log("\n===== No Timing Data Available =====\n")
+        if TIMING_MODE == 'suppressed' or not self.times:
             return
             
-        # Calculate the longest name for formatting
         longest_name = max(len(name) for name in self.times.keys())
         
         # Calculate max width needed for values
@@ -57,32 +63,27 @@ class TimingStats:
         max_total = max(sum(self.times[name]) for name in self.times) if all_durations else 0
         max_width = max(len(f"{max_total:.6f}"), 10)
         
-        # Create header
         separator = "=" * (longest_name + max_width * 2 + 30)
         header = f"\n{separator}\n"
         header += f"{'SCATTER TIMING REPORT':^{len(separator)}}\n"
         header += f"{separator}\n\n"
         
-        # Column headers with padding to align
         header += f"{'SECTION':<{longest_name+2}} | {'TOTAL TIME':^{max_width+2}} | {'AVG TIME':^{max_width+2}} | {'CALLS':^8}\n"
         header += f"{'-'*(longest_name+2)}-+-{'-'*(max_width+2)}-+-{'-'*(max_width+2)}-+-{'-'*8}\n"
         mset.log(header)
         
-        # Sort timings by total time (descending)
         sorted_times = sorted(
             self.times.items(), 
             key=lambda x: sum(x[1]), 
             reverse=True
         )
         
-        # Print each timing entry
         for name, durations in sorted_times:
             total = sum(durations)
             avg = total / len(durations) if durations else 0
             count = len(durations)
             mset.log(f"{name:<{longest_name+2}} | {total:>{max_width}.6f}s | {avg:>{max_width}.6f}s | {count:>8}\n")
         
-        # Add footer
         mset.log(f"\n{separator}\n")
 
 timing_stats = TimingStats()
@@ -380,7 +381,6 @@ class ScatterPlugin:
 
             scatter_surface.duplicate_mesh_objects_to_points()
             
-            # Report the timing statistics
             timing_stats.report()
 
     def _shutdown(self) -> None:
@@ -388,9 +388,21 @@ class ScatterPlugin:
 
 
 if __name__ == "__main__":
-    with cProfile.Profile() as pr:
+    parser = argparse.ArgumentParser(description='Scatter Plugin')
+    parser.add_argument('--timing', choices=['suppressed', 'log', 'verbose'], 
+                      default='log', help='Timing mode: suppressed (no timing), ' 
+                      'log (custom timers only), or verbose (custom timers + cProfile)')
+    
+    args = parser.parse_args(None if len(sys.argv) > 1 else [])
+    
+    TIMING_MODE = args.timing
+    
+    if TIMING_MODE == 'verbose':
+        with cProfile.Profile() as pr:
+            ScatterPlugin()
+        stats = Stats(pr)
+        stats.strip_dirs()
+        stats.sort_stats("cumtime")
+        stats.print_stats()
+    else:
         ScatterPlugin()
-    stats = Stats(pr)
-    stats.strip_dirs()
-    stats.sort_stats("cumtime")
-    stats.print_stats()
