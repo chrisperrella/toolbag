@@ -7,11 +7,19 @@ import sys
 import time
 import functools
 import argparse
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from pstats import Stats
 from typing import List, Tuple, Dict, Callable, Any
 from contextlib import contextmanager
+from debug_tools import (
+    save_callable_mask_as_image,
+    save_combined_mask_image,
+    initialize_csv_logger,
+    log_csv_sample,
+)
+import csv
+import numpy as np
+from PIL import Image
 
 import mset
 
@@ -176,7 +184,7 @@ def convert_rotation_to_euler(matrix: List[List[float]]) -> List[float]:
 
 def convert_normal_to_rotation(normal: List[float]) -> List[float]:
     normal = normalize(normal)
-    local_y = [0, 1, 0]
+    local_y = [0.0, 1.0, 0.0]
     cross = cross_product(local_y, normal)
     cross_magnitude = math.sqrt(sum(c**2 for c in cross))
 
@@ -218,25 +226,37 @@ class ScatterTriangle:
         interpolated = [self.normals[0][i] * u + self.normals[1][i] * v + self.normals[2][i] * w for i in range(3)]
         return normalize(interpolated)
 
+    def calculate_interpolated_uv(self, u: float, v: float, w: float) -> List[float]:
+        return [self.uvs[0][i] * u + self.uvs[1][i] * v + self.uvs[2][i] * w for i in range(2)]    
+
 
 class ScatterPoint:
-    def __init__(self, triangle, position, normal, barycentric, scale=None, rotation=None, mesh=None):
+    def __init__(self, triangle, position, normal, barycentric, scale=None, rotation=None, mesh_object=None):
         self.triangle = triangle
         self.position = position
         self.normal = normal
         self.barycentric = barycentric
+        self.uv = triangle.calculate_interpolated_uv(*barycentric)
         self.scale = scale or [1.0, 1.0, 1.0]
         self.rotation = [r + offset for r, offset in zip(convert_normal_to_rotation(normal), rotation or [0, 0, 0])]
-        self.source_mesh = mesh
+        self.mesh_object = mesh_object
 
-    def duplicate_mesh_object_to_point(self, name=None) -> mset.MeshObject:
-        mesh_object = self.source_mesh.duplicate()
-        mesh_object.position = self.position
-        mesh_object.rotation = self.rotation
-        mesh_object.scale = self.scale
+    def duplicate_mesh_object_to_point(self, name=None, apply_color=True) -> mset.MeshObject:
+        object = self.mesh_object.duplicate()
+        object.position = self.position
+        object.rotation = self.rotation
+        object.scale = self.scale
+        if apply_color:
+            rgba = [self.uv[0], self.uv[1], 0.0, 1.0]
+            vertex_count = len(object.mesh.vertices) // 3
+            color = []
+            for _ in range(vertex_count):
+                print(rgba)
+                color.extend(rgba)
+            object.mesh.colors = color
         if name:
-            mesh_object.name = name
-        return mesh_object
+            object.name = name
+        return object
 
 
 class ScatterMask:
@@ -314,7 +334,7 @@ class ScatterSurface:
 
         position = triangle.calculate_barycentric_position(u, v, w)
         normal = triangle.calculate_interpolated_normal(u, v, w)
-        scatter_point = ScatterPoint(triangle, position, normal, [u, v, w], mesh=mesh)
+        scatter_point = ScatterPoint(triangle, position, normal, [u, v, w], mesh_object=mesh)
         self.scatter_points.append(scatter_point)
         return scatter_point
 
@@ -332,17 +352,12 @@ class ScatterSurface:
                 raise ValueError(f"Unsupported blend method: {mask.blend_method}")
         return max(0.0, min(1.0, final_value))
 
-    def process_batch(self, batch: List[ScatterPoint]) -> List[mset.MeshObject]:
-        return [point.duplicate_mesh_object_to_point(name=f"ScatterPoint_{i}") for i, point in enumerate(batch)]
-
     @timed(name="duplicate_mesh_objects")
     def duplicate_mesh_objects_to_points(self):
-        batch_size = 10
-        scatter_batches = [self.scatter_points[i : i + batch_size] for i in range(0, len(self.scatter_points), batch_size)]
-
-        for batch in scatter_batches:
-            self.scatter_mesh_objects.extend(self.process_batch(batch))
-
+        for i, point in enumerate(self.scatter_points):
+            self.scatter_mesh_objects.append(
+                point.duplicate_mesh_object_to_point(name=f"ScatterPoint_{i}")
+            )
 
 class ScatterPlugin:
     def __init__(self) -> None:
@@ -350,7 +365,7 @@ class ScatterPlugin:
         self.window.visible = True
         self._test()
 
-    def _test(self):
+    def _test(self, num_points: int = 1000) -> None:
         with timed_section("total_test"):
             selected_objects = mset.getSelectedObjects()
             if not selected_objects:
@@ -358,14 +373,24 @@ class ScatterPlugin:
                 return
 
             scatter_mesh = selected_objects[0]
-            
+
             with timed_section("surface_creation"):
                 scatter_surface = ScatterSurface(scatter_mesh)
 
-            def checkerboard_mask(u, v, squares=6):
+            def checkerboard_mask(u, v, squares=2):
                 return 1.0 if (int(u * squares) + int(v * squares)) % 2 == 0 else 0.0
 
             scatter_surface.add_scatter_mask(checkerboard_mask)
+
+            # Save checkerboard mask visualization
+            save_callable_mask_as_image(checkerboard_mask, Path("C:/Temp/checkerboard_mask.png"))
+
+            # Save combined mask visualization
+            save_combined_mask_image(scatter_surface, Path("C:/Temp/combined_mask.png"))
+
+            # Initialize CSV log
+            log_path = Path("C:/Temp/scatter_debug.csv")
+            initialize_csv_logger(log_path)
 
             with timed_section("sphere_creation"):
                 tris, verts, uvs, polys = uvsphere(0.05 / mset.getSceneUnitScale(), 10, 10)
@@ -376,16 +401,26 @@ class ScatterPlugin:
                 debug_mesh_object.collapsed = True
 
             with timed_section("point_generation"):
-                for _ in range(1000):
-                    scatter_surface.generate_scatter_point(debug_mesh_object)
+                for _ in range(num_points):
+                    random_value = random.uniform(0, scatter_surface.cumulative_areas[-1])
+                    index = bisect.bisect(scatter_surface.cumulative_areas, random_value)
+                    triangle = scatter_surface.triangles[index]
+                    bary_u, bary_v, bary_w = triangle.generate_random_barycentric()
+                    u, v = triangle.calculate_interpolated_uv(bary_u, bary_v, bary_w)
+                    mask_value = scatter_surface.apply_masks(u, v)
+                    accepted = mask_value > 0.0
+                    log_csv_sample(log_path, u, v, mask_value, accepted, index)
+                    if accepted:
+                        point = ScatterPoint(triangle, triangle.calculate_barycentric_position(bary_u, bary_v, bary_w),
+                                            triangle.calculate_interpolated_normal(bary_u, bary_v, bary_w),
+                                            [bary_u, bary_v, bary_w], mesh_object=debug_mesh_object)
+                        scatter_surface.scatter_points.append(point)
 
             scatter_surface.duplicate_mesh_objects_to_points()
-            
             timing_stats.report()
 
-    def _shutdown(self) -> None:
-        mset.shutdownPlugin()
-
+        def _shutdown(self) -> None:
+            mset.shutdownPlugin()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Scatter Plugin')
