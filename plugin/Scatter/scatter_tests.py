@@ -1,4 +1,3 @@
-# scatter_tests.py
 from pathlib import Path
 from typing import List, Tuple
 import mset
@@ -30,12 +29,12 @@ def _run_once(num_points: int, seed: int) -> Tuple[int, List[List[float]]]:
     surface.add_scatter_mask(_checkerboard)
     surface.add_scatter_mask(_dark_ring, blend_method="multiply")
 
-    # Import here to avoid touching PIL at module import time of the tests
     from debug_tools import (
         save_callable_mask_as_image,
         save_combined_mask_image,
         initialize_csv_logger,
         log_csv_sample,
+        save_uv_scatter_image,
     )
 
     save_callable_mask_as_image(_checkerboard, Path("C:/Temp/mask_checkerboard.png"))
@@ -54,6 +53,9 @@ def _run_once(num_points: int, seed: int) -> Tuple[int, List[List[float]]]:
             log_csv_sample(csv_path, point.uv[0], point.uv[1], 1.0, True, 0)
 
     surface.duplicate_mesh_objects_to_points()
+
+    save_uv_scatter_image(surface, Path("C:/Temp/uv_scatter.png"), size=1024, point_radius=2)
+
     uvs = [p.uv for p in surface.scatter_points]
     return accepted, uvs
 
