@@ -1,122 +1,104 @@
 import bisect
-import importlib.util
 import math
 import random
-import sys
-from pathlib import Path
 from typing import List, Tuple
 
 import mset
-
-generate_primitives_path = Path("C:\\Program Files\\Marmoset\\Toolbag 5\\data\\plugin\\Generate Primitives")
-sys.path.append(str(generate_primitives_path))
-module_path = generate_primitives_path / "uvsphere.py"
-spec = importlib.util.spec_from_file_location("uvsphere", module_path)
-uvsphere_module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(uvsphere_module)
-uvsphere = uvsphere_module.uvsphere
+from math_utils import convert_normal_to_rotation, cross_product, dot_product, normalize
+from procedural_meshes import create_procedural_plane, create_uv_sphere, create_terrain
 
 
-def normalize(vector: List[float]) -> List[float]:
-    magnitude = math.sqrt(sum(comp**2 for comp in vector))
-    if magnitude == 0:
-        raise ValueError("Cannot normalize a zero-length vector")
-    return [comp / magnitude for comp in vector]
+def create_scene_and_scatter(surface_type: str, num_points: int = 1000, seed: int | None = None) -> None:
+    try:
+        if surface_type == "plane":
+            scatter_surface = create_procedural_plane()
+        elif surface_type == "sphere":
+            scatter_surface = create_uv_sphere()
+        elif surface_type == "terrain":
+            scatter_surface = create_terrain()
+        else:
+            mset.err(f"Unknown surface type: {surface_type}")
+            return
+        
+        mset.log(f"Created {surface_type} scatter surface\n")
+        
+        surface = ScatterSurface(scatter_surface, seed=seed)
+        instance = create_uv_sphere(0.05, 6, 12)
+        instance.name = "ScatterSphere"
+        instance.collapsed = True
+        
+        for _ in range(num_points):
+            surface.generate_scatter_point(mesh=instance)
+        
+        surface.duplicate_mesh_objects_to_points()
+        
+        actual_points = len(surface.scatter_points)
+        mset.log(f"Successfully scattered {actual_points} spheres on {surface_type} surface\n")
+        
+    except Exception as e:
+        mset.err(f"Failed to create scene and scatter: {str(e)}")
 
 
-def cross_product(a: List[float], b: List[float]) -> List[float]:
-    return [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
+def scatter_with_primitive(num_points: int = 1000, seed: int | None = None) -> None:
+    selected = mset.getSelectedObjects()
+    if not selected:
+        mset.err("Please select a mesh object to scatter on.")
+        return
+    
+    scatter_mesh = selected[0]
+    if not isinstance(scatter_mesh, mset.MeshObject):
+        mset.err("Selected object is not a mesh. Please select a mesh object.")
+        return
+    
+    mset.log(f"Scattering {num_points} spheres on {scatter_mesh.name}...\n")
+    
+    try:
+        surface = ScatterSurface(scatter_mesh, seed=seed)
+        instance = create_uv_sphere(0.05, 6, 12)
+        instance.name = "ScatterSphere"
+        instance.collapsed = True
+        
+        for _ in range(num_points):
+            surface.generate_scatter_point(mesh=instance)
+        
+        surface.duplicate_mesh_objects_to_points()
+        
+        actual_points = len(surface.scatter_points)
+        mset.log(f"Successfully scattered {actual_points} spheres on {scatter_mesh.name}\n")
+        
+    except Exception as e:
+        mset.err(f"Failed to scatter objects: {str(e)}")
 
 
-def dot_product(a: List[float], b: List[float]) -> float:
-    return sum(a[i] * b[i] for i in range(len(a)))
+def scatter_with_selected_prototype(num_points: int = 1000, seed: int | None = None) -> None:
+    selected = mset.getSelectedObjects()
+    if not selected or len(selected) < 2:
+        mset.log("Select the scatter surface first, then the prototype object.\n")
+        return
+    surface_obj, proto_obj = selected[0], selected[1]
+    surface = ScatterSurface(surface_obj, seed=seed)
+    for _ in range(num_points):
+        surface.generate_scatter_point(mesh=proto_obj)
+    surface.duplicate_mesh_objects_to_points()
 
 
-def create_rotation_matrix(axis: List[float], angle: float) -> List[List[float]]:
-    x, y, z = axis
-    cos_angle = math.cos(angle)
-    sin_angle = math.sin(angle)
-    one_minus_cos = 1 - cos_angle
-    return [
-        [
-            cos_angle + x * x * one_minus_cos,
-            x * y * one_minus_cos - z * sin_angle,
-            x * z * one_minus_cos + y * sin_angle,
-        ],
-        [
-            y * x * one_minus_cos + z * sin_angle,
-            cos_angle + y * y * one_minus_cos,
-            y * z * one_minus_cos - x * sin_angle,
-        ],
-        [
-            z * x * one_minus_cos - y * sin_angle,
-            z * y * one_minus_cos + x * sin_angle,
-            cos_angle + z * z * one_minus_cos,
-        ],
-    ]
+class ScatterMask:
+    def __init__(self, mask_data, blend_method="multiply"):
+        self.mask_data = mask_data
+        self.blend_method = blend_method.lower()
 
-
-def convert_rotation_to_euler(matrix: List[List[float]]) -> List[float]:
-    sy = math.sqrt(matrix[0][0] ** 2 + matrix[1][0] ** 2)
-    singular = sy < 1e-6
-    if not singular:
-        x = math.atan2(matrix[2][1], matrix[2][2])
-        y = math.atan2(-matrix[2][0], sy)
-        z = math.atan2(matrix[1][0], matrix[0][0])
-    else:
-        x = math.atan2(-matrix[1][2], matrix[1][1])
-        y = math.atan2(-matrix[2][0], sy)
-        z = 0
-    return [math.degrees(x), math.degrees(y), math.degrees(z)]
-
-
-def convert_normal_to_rotation(normal: List[float]) -> List[float]:
-    normal = normalize(normal)
-    local_y = [0.0, 1.0, 0.0]
-    cross = cross_product(local_y, normal)
-    cross_magnitude = math.sqrt(sum(c**2 for c in cross))
-    if cross_magnitude < 1e-6:
-        return [0, 0, 0] if normal[1] > 0 else [180, 0, 0]
-    axis = normalize(cross)
-    dot = dot_product(local_y, normal)
-    angle = math.atan2(cross_magnitude, dot)
-    rotation_matrix = create_rotation_matrix(axis, angle)
-    return convert_rotation_to_euler(rotation_matrix)
-
-
-class ScatterTriangle:
-    def __init__(self, indices, vertices, normals, uvs):
-        self.indices = indices
-        self.vertices = vertices
-        self.normals = normals
-        self.uvs = uvs
-
-    def area(self) -> float:
-        edge1 = [v2 - v1 for v1, v2 in zip(self.vertices[0], self.vertices[1])]
-        edge2 = [v3 - v1 for v1, v3 in zip(self.vertices[0], self.vertices[2])]
-        cross = cross_product(edge1, edge2)
-        return 0.5 * math.sqrt(dot_product(cross, cross))
-
-    @staticmethod
-    def generate_random_barycentric() -> Tuple[float, float, float]:
-        u, v = random.uniform(0, 1), random.uniform(0, 1)
-        if u + v > 1:
-            u, v = 1 - u, 1 - v
-        return 1 - u - v, u, v
-
-    def calculate_barycentric_position(self, u: float, v: float, w: float) -> List[float]:
-        return [self.vertices[0][i] * u + self.vertices[1][i] * v + self.vertices[2][i] * w for i in range(3)]
-
-    def calculate_interpolated_normal(self, u: float, v: float, w: float) -> List[float]:
-        interpolated = [self.normals[0][i] * u + self.normals[1][i] * v + self.normals[2][i] * w for i in range(3)]
-        return normalize(interpolated)
-
-    def calculate_interpolated_uv(self, u: float, v: float, w: float) -> List[float]:
-        return [self.uvs[0][i] * u + self.uvs[1][i] * v + self.uvs[2][i] * w for i in range(2)]
+    def get_value(self, u: float, v: float) -> float:
+        if callable(self.mask_data):
+            result = self.mask_data(u, v)
+            return float(result) if result is not None else 0.0
+        elif isinstance(self.mask_data, list):
+            height = len(self.mask_data)
+            width = len(self.mask_data[0]) if height > 0 else 0
+            x = max(0, min(width - 1, int(u * width)))
+            y = max(0, min(height - 1, int(v * height)))
+            return float(self.mask_data[y][x])
+        else:
+            raise TypeError(f"Unexpected mask_data type: {type(self.mask_data)}")
 
 
 class ScatterPoint:
@@ -131,6 +113,9 @@ class ScatterPoint:
         self.mesh_object = mesh_object
 
     def duplicate_mesh_object_to_point(self, name=None, apply_color=True) -> mset.MeshObject:
+        if self.mesh_object is None:
+            raise ValueError("No mesh object available for duplication")
+        
         object = self.mesh_object.duplicate()
         object.position = self.position
         object.rotation = self.rotation
@@ -147,26 +132,8 @@ class ScatterPoint:
         return object
 
 
-class ScatterMask:
-    def __init__(self, mask_data, blend_method="multiply"):
-        self.mask_data = mask_data
-        self.blend_method = blend_method.lower()
-
-    def get_value(self, u: float, v: float) -> float:
-        if callable(self.mask_data):
-            return float(self.mask_data(u, v))
-        elif isinstance(self.mask_data, list):
-            height = len(self.mask_data)
-            width = len(self.mask_data[0]) if height > 0 else 0
-            x = max(0, min(width - 1, int(u * width)))
-            y = max(0, min(height - 1, int(v * height)))
-            return float(self.mask_data[y][x])
-        else:
-            raise TypeError(f"Unexpected mask_data type: {type(self.mask_data)}")
-
-
 class ScatterSurface:
-    def __init__(self, mesh_object: mset.MeshObject, seed: int = None) -> None:
+    def __init__(self, mesh_object: mset.MeshObject, seed: int | None = None) -> None:
         self.scene_object = mesh_object
         self.mesh = mesh_object.mesh
         self.vertices = self.mesh.vertices
@@ -182,6 +149,11 @@ class ScatterSurface:
         self._prepare_mesh_data()
         self._apply_random_seed(seed)
 
+    @staticmethod
+    def _apply_random_seed(seed: int | None) -> None:
+        if seed is not None:
+            random.seed(seed)
+
     def _prepare_mesh_data(self):
         cumulative_area = 0.0
         for i in range(0, len(self.triangle_indices), 3):
@@ -195,11 +167,6 @@ class ScatterSurface:
             self.cumulative_areas.append(cumulative_area)
         if not self.triangles:
             raise ValueError("Mesh has no valid triangles for scattering.")
-
-    @staticmethod
-    def _apply_random_seed(seed: int) -> None:
-        if seed is not None:
-            random.seed(seed)
 
     def add_scatter_mask(self, mask_data, blend_method="multiply") -> ScatterMask:
         mask = ScatterMask(mask_data, blend_method)
@@ -220,7 +187,11 @@ class ScatterSurface:
                 raise ValueError(f"Unsupported blend method: {mask.blend_method}")
         return max(0.0, min(1.0, final_value))
 
-    def generate_scatter_point(self, mesh: mset.MeshObject = None):
+    def duplicate_mesh_objects_to_points(self):
+        for i, point in enumerate(self.scatter_points):
+            self.scatter_mesh_objects.append(point.duplicate_mesh_object_to_point(name=f"ScatterPoint_{i}"))
+
+    def generate_scatter_point(self, mesh: mset.MeshObject | None = None):
         random_value = random.uniform(0, self.cumulative_areas[-1])
         index = bisect.bisect(self.cumulative_areas, random_value)
         triangle = self.triangles[index]
@@ -235,41 +206,33 @@ class ScatterSurface:
         self.scatter_points.append(scatter_point)
         return scatter_point
 
-    def duplicate_mesh_objects_to_points(self):
-        for i, point in enumerate(self.scatter_points):
-            self.scatter_mesh_objects.append(point.duplicate_mesh_object_to_point(name=f"ScatterPoint_{i}"))
 
+class ScatterTriangle:
+    def __init__(self, indices, vertices, normals, uvs):
+        self.indices = indices
+        self.vertices = vertices
+        self.normals = normals
+        self.uvs = uvs
 
-def build_uvsphere_instance() -> mset.MeshObject:
-    tris, verts, uvs, polys = uvsphere(0.05 / mset.getSceneUnitScale(), 10, 10)
-    mesh = mset.Mesh(triangles=tris, vertices=verts, uvs=uvs)
-    obj = mset.MeshObject()
-    obj.mesh = mesh
-    obj.addSubmesh(obj.name)
-    obj.collapsed = True
-    return obj
+    @staticmethod
+    def generate_random_barycentric() -> Tuple[float, float, float]:
+        u, v = random.uniform(0, 1), random.uniform(0, 1)
+        if u + v > 1:
+            u, v = 1 - u, 1 - v
+        return 1 - u - v, u, v
 
+    def area(self) -> float:
+        edge1 = [v2 - v1 for v1, v2 in zip(self.vertices[0], self.vertices[1])]
+        edge2 = [v3 - v1 for v1, v3 in zip(self.vertices[0], self.vertices[2])]
+        cross = cross_product(edge1, edge2)
+        return 0.5 * math.sqrt(dot_product(cross, cross))
 
-def scatter_with_primitive(num_points: int = 1000, seed: int | None = None) -> None:
-    selected = mset.getSelectedObjects()
-    if not selected:
-        mset.log("No objects selected.")
-        return
-    scatter_mesh = selected[0]
-    surface = ScatterSurface(scatter_mesh, seed=seed)
-    instance = build_uvsphere_instance()
-    for _ in range(num_points):
-        surface.generate_scatter_point(mesh=instance)
-    surface.duplicate_mesh_objects_to_points()
+    def calculate_barycentric_position(self, u: float, v: float, w: float) -> List[float]:
+        return [self.vertices[0][i] * u + self.vertices[1][i] * v + self.vertices[2][i] * w for i in range(3)]
 
+    def calculate_interpolated_normal(self, u: float, v: float, w: float) -> List[float]:
+        interpolated = [self.normals[0][i] * u + self.normals[1][i] * v + self.normals[2][i] * w for i in range(3)]
+        return normalize(interpolated)
 
-def scatter_with_selected_prototype(num_points: int = 1000, seed: int | None = None) -> None:
-    selected = mset.getSelectedObjects()
-    if not selected or len(selected) < 2:
-        mset.log("Select the scatter surface first, then the prototype object.")
-        return
-    surface_obj, proto_obj = selected[0], selected[1]
-    surface = ScatterSurface(surface_obj, seed=seed)
-    for _ in range(num_points):
-        surface.generate_scatter_point(mesh=proto_obj)
-    surface.duplicate_mesh_objects_to_points()
+    def calculate_interpolated_uv(self, u: float, v: float, w: float) -> List[float]:
+        return [self.uvs[0][i] * u + self.uvs[1][i] * v + self.uvs[2][i] * w for i in range(2)]
