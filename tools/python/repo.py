@@ -7,16 +7,19 @@ import tempfile
 def install_requirements() -> bool:
     lines = []
     requirements = {
-        "colorama": ("0.4.6", "import colorama"),
-        "toml": ("0.10.2", "import toml"),
-        "isort": ("5.13.2", "import isort"),
         "black": ("24.10.0", "import black"),
+        "colorama": ("0.4.6", "import colorama"),
+        "isort": ("5.13.2", "import isort"),
+        "mset": ("4.5.4", "import mset"),
+        "numpy": ("2.3.2", "import numpy"),
+        "toml": ("0.10.2", "import toml"),
+        "warp": ("1.0.4", "import warp"),
     }
     for name in requirements:
         version, import_line = requirements[name]
         try:
             exec(import_line)
-        except ImportError:
+        except (ImportError, SyntaxError):
             lines.append(f"{name}=={version}")
     if len(lines) > 0:
         with tempfile.NamedTemporaryFile(delete=False, mode="w+", suffix=".txt") as file:
