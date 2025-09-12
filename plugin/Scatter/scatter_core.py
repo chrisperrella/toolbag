@@ -5,7 +5,7 @@ from typing import List, Tuple
 
 import mset
 from math_utils import convert_normal_to_rotation, cross_product, dot_product, normalize
-from procedural_meshes import create_procedural_plane, create_uv_sphere, create_terrain
+from procedural_meshes import create_procedural_plane, create_terrain, create_uv_sphere
 
 
 def create_scene_and_scatter(surface_type: str, num_points: int = 1000, seed: int | None = None) -> None:
@@ -19,22 +19,22 @@ def create_scene_and_scatter(surface_type: str, num_points: int = 1000, seed: in
         else:
             mset.err(f"Unknown surface type: {surface_type}")
             return
-        
+
         mset.log(f"Created {surface_type} scatter surface\n")
-        
+
         surface = ScatterSurface(scatter_surface, seed=seed)
         instance = create_uv_sphere(0.05, 6, 12)
         instance.name = "ScatterSphere"
         instance.collapsed = True
-        
+
         for _ in range(num_points):
             surface.generate_scatter_point(mesh=instance)
-        
+
         surface.duplicate_mesh_objects_to_points()
-        
+
         actual_points = len(surface.scatter_points)
         mset.log(f"Successfully scattered {actual_points} spheres on {surface_type} surface\n")
-        
+
     except Exception as e:
         mset.err(f"Failed to create scene and scatter: {str(e)}")
 
@@ -44,28 +44,28 @@ def scatter_with_primitive(num_points: int = 1000, seed: int | None = None) -> N
     if not selected:
         mset.err("Please select a mesh object to scatter on.")
         return
-    
+
     scatter_mesh = selected[0]
     if not isinstance(scatter_mesh, mset.MeshObject):
         mset.err("Selected object is not a mesh. Please select a mesh object.")
         return
-    
+
     mset.log(f"Scattering {num_points} spheres on {scatter_mesh.name}...\n")
-    
+
     try:
         surface = ScatterSurface(scatter_mesh, seed=seed)
         instance = create_uv_sphere(0.05, 6, 12)
         instance.name = "ScatterSphere"
         instance.collapsed = True
-        
+
         for _ in range(num_points):
             surface.generate_scatter_point(mesh=instance)
-        
+
         surface.duplicate_mesh_objects_to_points()
-        
+
         actual_points = len(surface.scatter_points)
         mset.log(f"Successfully scattered {actual_points} spheres on {scatter_mesh.name}\n")
-        
+
     except Exception as e:
         mset.err(f"Failed to scatter objects: {str(e)}")
 
@@ -84,8 +84,8 @@ def scatter_with_selected_prototype(num_points: int = 1000, seed: int | None = N
 
 class ScatterMask:
     def __init__(self, mask_data, blend_method="multiply"):
-        self.mask_data = mask_data
         self.blend_method = blend_method.lower()
+        self.mask_data = mask_data
 
     def get_value(self, u: float, v: float) -> float:
         if callable(self.mask_data):
@@ -103,19 +103,18 @@ class ScatterMask:
 
 class ScatterPoint:
     def __init__(self, triangle, position, normal, barycentric, scale=None, rotation=None, mesh_object=None):
-        self.triangle = triangle
-        self.position = position
-        self.normal = normal
         self.barycentric = barycentric
-        self.uv = triangle.calculate_interpolated_uv(*barycentric)
-        self.scale = scale or [1.0, 1.0, 1.0]
-        self.rotation = [r + offset for r, offset in zip(convert_normal_to_rotation(normal), rotation or [0, 0, 0])]
         self.mesh_object = mesh_object
+        self.normal = normal
+        self.position = position
+        self.rotation = [r + offset for r, offset in zip(convert_normal_to_rotation(normal), rotation or [0, 0, 0])]
+        self.scale = scale or [1.0, 1.0, 1.0]
+        self.triangle = triangle
+        self.uv = triangle.calculate_interpolated_uv(*barycentric)
 
     def duplicate_mesh_object_to_point(self, name=None, apply_color=True) -> mset.MeshObject:
         if self.mesh_object is None:
             raise ValueError("No mesh object available for duplication")
-        
         object = self.mesh_object.duplicate()
         object.position = self.position
         object.rotation = self.rotation
@@ -134,23 +133,22 @@ class ScatterPoint:
 
 class ScatterSurface:
     def __init__(self, mesh_object: mset.MeshObject, seed: int | None = None) -> None:
-        self.scene_object = mesh_object
+        self.cumulative_areas: List[float] = []
         self.mesh = mesh_object.mesh
-        self.vertices = self.mesh.vertices
         self.normals = self.mesh.normals
-        self.uvs = self.mesh.uvs
+        self.scatter_masks: List[ScatterMask] = []
+        self.scatter_mesh_objects: List[mset.MeshObject] = []
+        self.scatter_points: List[ScatterPoint] = []
+        self.scene_object = mesh_object
+        self.seed = seed
         self.triangle_indices = self.mesh.triangles
         self.triangles: List[ScatterTriangle] = []
-        self.cumulative_areas: List[float] = []
-        self.scatter_masks: List[ScatterMask] = []
-        self.scatter_points: List[ScatterPoint] = []
-        self.scatter_mesh_objects: List[mset.MeshObject] = []
-        self.seed = seed
+        self.uvs = self.mesh.uvs
+        self.vertices = self.mesh.vertices
         self._prepare_mesh_data()
         self._apply_random_seed(seed)
 
-    @staticmethod
-    def _apply_random_seed(seed: int | None) -> None:
+    def _apply_random_seed(self, seed: int | None) -> None:
         if seed is not None:
             random.seed(seed)
 
@@ -210,9 +208,9 @@ class ScatterSurface:
 class ScatterTriangle:
     def __init__(self, indices, vertices, normals, uvs):
         self.indices = indices
-        self.vertices = vertices
         self.normals = normals
         self.uvs = uvs
+        self.vertices = vertices
 
     @staticmethod
     def generate_random_barycentric() -> Tuple[float, float, float]:

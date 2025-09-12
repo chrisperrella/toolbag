@@ -52,16 +52,13 @@ def save_uv_scatter_image(surface, path: Path, size: int = 1024, point_radius: i
     draw = ImageDraw.Draw(img)
     grid_color = (45, 45, 45)
     mid_color = (70, 70, 70)
-    
     for t in range(1, 10):
         x = int(size * (t / 10.0))
         y = x
         draw.line([(x, 0), (x, size)], fill=grid_color)
         draw.line([(0, y), (size, y)], fill=grid_color)
-    
     draw.line([(size // 2, 0), (size // 2, size)], fill=mid_color)
     draw.line([(0, size // 2), (size, size // 2)], fill=mid_color)
-    
     for p in surface.scatter_points:
         u, v = p.uv
         x = int(u * size + 0.5)
@@ -70,5 +67,4 @@ def save_uv_scatter_image(surface, path: Path, size: int = 1024, point_radius: i
         y = max(0, min(size - 1, y))
         bbox = [x - point_radius, y - point_radius, x + point_radius, y + point_radius]
         draw.ellipse(bbox, fill=(200, 200, 255), outline=(255, 255, 255))
-    
     img.save(str(path))

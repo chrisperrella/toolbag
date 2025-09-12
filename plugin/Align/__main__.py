@@ -16,9 +16,7 @@ class AlignPlugin:
         multi_selection_required: bool = True,
     ) -> List[mset.MeshObject]:
         selected_objects = mset.getSelectedObjects()
-        selected_mesh_objects = [
-            obj for obj in selected_objects if isinstance(obj, mset.MeshObject)
-        ]
+        selected_mesh_objects = [obj for obj in selected_objects if isinstance(obj, mset.MeshObject)]
         if multi_selection_required and len(selected_mesh_objects) < 2:
             mset.err("[AlignPlugin]: At least two mesh objects must be selected. \n")
         if not selected_mesh_objects:
@@ -66,9 +64,7 @@ class AlignPlugin:
         self.tool_logo_button.frameless = True
         self.tool_logo_button.lit = False
 
-        self.axis_align_label: mset.UILabel = mset.UILabel(
-            "Align to First Selection Axis:"
-        )
+        self.axis_align_label: mset.UILabel = mset.UILabel("Align to First Selection Axis:")
         self.axis_align_x: mset.UIButton = mset.UIButton()
         self.axis_align_x.text = "X"
         self.axis_align_x.onClick = lambda: self.align(axis=0)
@@ -107,30 +103,20 @@ class AlignPlugin:
         self.axis_align_max_z.text = "Z"
         self.axis_align_max_z.onClick = lambda: self.align_to_max(2)
 
-        self.axis_distribute_label: mset.UILabel = mset.UILabel(
-            "Distribute Along Axis:"
-        )
+        self.axis_distribute_label: mset.UILabel = mset.UILabel("Distribute Along Axis:")
         self.axis_distribute_x: mset.UIButton = mset.UIButton()
         self.axis_distribute_x.text = "X"
-        self.axis_distribute_x.onClick = lambda: self.distribute(
-            axis=0, spacing=self.axis_distribute_spacing.value
-        )
+        self.axis_distribute_x.onClick = lambda: self.distribute(axis=0, spacing=self.axis_distribute_spacing.value)
 
         self.axis_distribute_y: mset.UIButton = mset.UIButton()
         self.axis_distribute_y.text = "Y"
-        self.axis_distribute_y.onClick = lambda: self.distribute(
-            axis=1, spacing=self.axis_distribute_spacing.value
-        )
+        self.axis_distribute_y.onClick = lambda: self.distribute(axis=1, spacing=self.axis_distribute_spacing.value)
 
         self.axis_distribute_z: mset.UIButton = mset.UIButton()
         self.axis_distribute_z.text = "Z"
-        self.axis_distribute_z.onClick = lambda: self.distribute(
-            axis=2, spacing=self.axis_distribute_spacing.value
-        )
+        self.axis_distribute_z.onClick = lambda: self.distribute(axis=2, spacing=self.axis_distribute_spacing.value)
 
-        self.axis_distribute_spacing: mset.UISliderFloat = mset.UISliderFloat(
-            min=0, max=250, name="Spacing"
-        )
+        self.axis_distribute_spacing: mset.UISliderFloat = mset.UISliderFloat(min=0, max=250, name="Spacing")
 
         self.window.addElement(self.axis_align_label)
         self.window.addReturn()
