@@ -30,7 +30,7 @@ def create_scene_and_scatter(surface_type: str, num_points: int = 1000, seed: in
         for _ in range(num_points):
             surface.generate_scatter_point(mesh=instance)
 
-        surface.duplicate_mesh_objects_to_points()
+        surface.duplicate_mesh_objects_to_points(source_name=instance.name)
 
         actual_points = len(surface.scatter_points)
         mset.log(f"Successfully scattered {actual_points} spheres on {surface_type} surface\n")
@@ -61,7 +61,7 @@ def scatter_with_primitive(num_points: int = 1000, seed: int | None = None) -> N
         for _ in range(num_points):
             surface.generate_scatter_point(mesh=instance)
 
-        surface.duplicate_mesh_objects_to_points()
+        surface.duplicate_mesh_objects_to_points(source_name=instance.name)
 
         actual_points = len(surface.scatter_points)
         mset.log(f"Successfully scattered {actual_points} spheres on {scatter_mesh.name}\n")
@@ -75,11 +75,14 @@ def scatter_with_selected_prototype(num_points: int = 1000, seed: int | None = N
     if not selected or len(selected) < 2:
         mset.log("Select the scatter surface first, then the prototype object.\n")
         return
+    
     surface_obj, proto_obj = selected[0], selected[1]
     surface = ScatterSurface(surface_obj, seed=seed)
+    
     for _ in range(num_points):
         surface.generate_scatter_point(mesh=proto_obj)
-    surface.duplicate_mesh_objects_to_points()
+    
+    surface.duplicate_mesh_objects_to_points(source_name=proto_obj.name)
 
 
 class ScatterMask:
@@ -90,7 +93,10 @@ class ScatterMask:
     def get_value(self, u: float, v: float) -> float:
         if callable(self.mask_data):
             result = self.mask_data(u, v)
-            return float(result) if result is not None else 0.0
+            try:
+                return float(result)
+            except (TypeError, ValueError):
+                return 0.0
         elif isinstance(self.mask_data, list):
             height = len(self.mask_data)
             width = len(self.mask_data[0]) if height > 0 else 0
@@ -112,13 +118,18 @@ class ScatterPoint:
         self.triangle = triangle
         self.uv = triangle.calculate_interpolated_uv(*barycentric)
 
-    def duplicate_mesh_object_to_point(self, name=None, apply_color=True) -> mset.MeshObject:
+    def duplicate_mesh_object_to_point(self, name=None, apply_color=True, parent=None) -> mset.MeshObject:
         if self.mesh_object is None:
             raise ValueError("No mesh object available for duplication")
         object = self.mesh_object.duplicate()
         object.position = self.position
         object.rotation = self.rotation
         object.scale = self.scale
+        object.collapsed = True
+        
+        if parent is not None:
+            object.parent = parent
+            
         if apply_color:
             rgba = [self.uv[0], self.uv[1], 0.0, 1.0]
             vertex_count = len(object.mesh.vertices) // 3
@@ -151,6 +162,28 @@ class ScatterSurface:
     def _apply_random_seed(self, seed: int | None) -> None:
         if seed is not None:
             random.seed(seed)
+
+    def _get_or_create_scattered_objects_container(self) -> mset.TransformObject:
+        for child in self.scene_object.getChildren():
+            if hasattr(child, 'name') and child.name == "ScatteredObjects" and isinstance(child, mset.TransformObject):
+                return child
+        
+        scattered_objects = mset.TransformObject()
+        scattered_objects.name = "ScatteredObjects"
+        scattered_objects.parent = self.scene_object
+        scattered_objects.collapsed = True
+        return scattered_objects
+
+    def _get_or_create_object_folder(self, scattered_objects: mset.TransformObject, object_name: str) -> mset.TransformObject:
+        for child in scattered_objects.getChildren():
+            if hasattr(child, 'name') and child.name == object_name and isinstance(child, mset.TransformObject):
+                return child
+        
+        object_folder = mset.TransformObject()
+        object_folder.name = object_name
+        object_folder.parent = scattered_objects
+        object_folder.collapsed = True
+        return object_folder
 
     def _prepare_mesh_data(self):
         cumulative_area = 0.0
@@ -185,9 +218,17 @@ class ScatterSurface:
                 raise ValueError(f"Unsupported blend method: {mask.blend_method}")
         return max(0.0, min(1.0, final_value))
 
-    def duplicate_mesh_objects_to_points(self):
+    def duplicate_mesh_objects_to_points(self, source_name="Object"):
+        scattered_objects = self._get_or_create_scattered_objects_container()
+        object_folder = self._get_or_create_object_folder(scattered_objects, source_name)
+        
         for i, point in enumerate(self.scatter_points):
-            self.scatter_mesh_objects.append(point.duplicate_mesh_object_to_point(name=f"ScatterPoint_{i}"))
+            object_name = f"{source_name}_{i+1:03d}"
+            scattered_obj = point.duplicate_mesh_object_to_point(
+                name=object_name, 
+                parent=object_folder
+            )
+            self.scatter_mesh_objects.append(scattered_obj)
 
     def generate_scatter_point(self, mesh: mset.MeshObject | None = None):
         random_value = random.uniform(0, self.cumulative_areas[-1])
